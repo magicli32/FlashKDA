@@ -82,26 +82,6 @@ struct SharedStorageK1 {
     alignas(16) cutlass::arch::ClusterTransactionBarrier tma_load_barrier;
 };
 
-// Build prefix-sum of per-sequence tile counts, so Kernel 1 can map
-// global_tile_idx -> seq_idx with an O(log N) binary search instead of an
-// O(N) linear scan per CTA in varlen mode.
-__global__ void _flash_kda_build_tile_prefix(
-    int64_t const* __restrict__ cu_seqlens,
-    int N,
-    int chunk,
-    int* __restrict__ tile_prefix
-) {
-    if (threadIdx.x == 0) {
-        int acc = 0;
-        tile_prefix[0] = 0;
-        for (int i = 0; i < N; ++i) {
-            int slen = int(cu_seqlens[i + 1] - cu_seqlens[i]);
-            acc += (slen + chunk - 1) / chunk;
-            tile_prefix[i + 1] = acc;
-        }
-    }
-}
-
 // ==================== Kernel 1: Prepare ====================
 template <
     class TmaLoadQ,
@@ -114,7 +94,8 @@ template <
     int CHUNK,
     int D,
     int NumThreads,
-    bool IsVarlen = true
+    bool IsVarlen = true,
+    bool WarmupOnly = false
 >
 __global__ void __launch_bounds__(NumThreads, 8) _flash_kda_fwd_prepare(
     CUTE_GRID_CONSTANT TmaLoadQ const tma_load_q,
@@ -136,7 +117,7 @@ __global__ void __launch_bounds__(NumThreads, 8) _flash_kda_fwd_prepare(
     int total_tiles,
     float const* A_log_ptr,
     float gate_scale,
-    int const* tile_prefix
+    int const* num_warmup_chunks_ptr
 ) {
     // --- constants
     using BF16 = cutlass::bfloat16_t;
@@ -172,14 +153,20 @@ __global__ void __launch_bounds__(NumThreads, 8) _flash_kda_fwd_prepare(
     int seq_len, t_tiles_this_seq;
 
     if constexpr (IsVarlen) {
-        int lo = 0, hi = N;
-        while (lo + 1 < hi) {
-            int mid = (lo + hi) >> 1;
-            if (tile_prefix[mid] <= global_tile_idx) lo = mid;
-            else hi = mid;
+        // Linear scan on cu_seqlens to find (seq_idx, local_t)
+        seq_idx = -1;
+        tiles_before = 0;
+        for (int i = 0; i < N; i++) {
+            int slen = int(cu_seqlens[i + 1] - cu_seqlens[i]);
+            int n_tiles = (slen + CHUNK - 1) / CHUNK;
+            if (tiles_before + n_tiles > global_tile_idx) {
+                seq_idx = i;
+                break;
+            }
+            tiles_before += n_tiles;
         }
-        seq_idx = lo;
-        tiles_before = tile_prefix[lo];
+        // Early exit for excess CTAs that don't map to any sequence
+        if (seq_idx < 0) return;
         local_t = global_tile_idx - tiles_before;
         bos = cu_seqlens[seq_idx];
         eos = cu_seqlens[seq_idx + 1];
@@ -196,12 +183,17 @@ __global__ void __launch_bounds__(NumThreads, 8) _flash_kda_fwd_prepare(
     t_tiles_this_seq = (seq_len + CHUNK - 1) / CHUNK;
     // Early exit for excess CTAs (total_tiles is an upper bound)
     if (local_t >= t_tiles_this_seq) return;
+    // WarmupOnly: skip tiles outside the warmup suffix
+    if constexpr (WarmupOnly) {
+        int warmup = num_warmup_chunks_ptr[seq_idx];
+        int t_start = t_tiles_this_seq - min(warmup, t_tiles_this_seq);
+        if (local_t < t_start) return;
+    }
     // --- TMA load inputs (single-shot, no pipeline)
     // Only thread 0 issues TMA loads (not elect_one_sync which is per-warp)
     if (threadIdx.x == 0) {
         using BarrierType = cutlass::arch::ClusterTransactionBarrier::ValueType;
         shared_storage.tma_load_barrier.init(1);
-        cutlass::arch::fence_barrier_init();  // generic init -> visible to async proxy (TMA complete-tx)
         shared_storage.tma_load_barrier.arrive_and_expect_tx(kTmaTransactionBytes);
 
         Tensor g_q = tma_load_q.get_tma_tensor(make_shape(H, T_total, D));
