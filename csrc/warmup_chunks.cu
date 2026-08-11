@@ -3,9 +3,10 @@
 #include <cuda_runtime.h>
 #include <cuda_bf16.h>
 #include <cmath>
+#include <math_constants.h>
 
 // get_warmup_chunks CUDA kernel
-// Grid: (N,)  Block: (H,) where H <= 256
+// Grid: (N,)  Block: (next power of two >= H), where H <= 256
 // Each block processes one segment, each thread handles one head.
 // Scans backwards from the end accumulating gate decay until all heads converge.
 // Uses min over D dimensions (not mean) to guarantee the weakest dimension converges.
@@ -24,17 +25,18 @@ __global__ void get_warmup_chunks_kernel(
     int seg_idx = blockIdx.x;
     int h = threadIdx.x;  // head index
 
-    if (h >= H) return;
+    // Padding threads must participate because the block uses __syncthreads().
+    bool active = h < H;
 
     int64_t bos = cu_seqlens[seg_idx];
     int64_t eos = cu_seqlens[seg_idx + 1];
     int seg_len = (int)(eos - bos);
     int nc = (seg_len + chunk_size - 1) / chunk_size;
 
-    float a_exp = expf(A_log[h]);
+    float a_exp = active ? expf(A_log[h]) : 0.0f;
 
     // Per-head cumulative decay (negative, grows more negative)
-    float g_cumsum = 0.0f;
+    float g_cumsum = active ? 0.0f : -CUDART_INF_F;
 
     // Shared memory for cross-head reduction
     extern __shared__ float smem[];  // [H]
@@ -47,17 +49,20 @@ __global__ void get_warmup_chunks_kernel(
         if (chunk_end < (int)bos) chunk_end = (int)bos;
 
         // Compute min over D: gate per-dim, take the weakest (least negative)
-        const __nv_bfloat16* g_row = g_ptr + (int64_t)chunk_end * H * D + (int64_t)h * D;
         float sig_min = 1.0f;  // sigmoid max is 1, start high
-        for (int d = 0; d < D; d++) {
-            float g_val = __bfloat162float(g_row[d]);
-            float x = a_exp * (g_val + dt_bias[h * D + d]);
-            float sig = 1.0f / (1.0f + expf(-x));
-            sig_min = fminf(sig_min, sig);
+        if (active) {
+            const __nv_bfloat16* g_row =
+                g_ptr + (int64_t)chunk_end * H * D + (int64_t)h * D;
+            for (int d = 0; d < D; d++) {
+                float g_val = __bfloat162float(g_row[d]);
+                float x = a_exp * (g_val + dt_bias[h * D + d]);
+                float sig = 1.0f / (1.0f + expf(-x));
+                sig_min = fminf(sig_min, sig);
+            }
         }
 
         // gate_scale is negative, sig_min is the weakest sigmoid → least decay
-        float decay = gate_scale * sig_min * (float)chunk_size;
+        float decay = active ? gate_scale * sig_min * (float)chunk_size : 0.0f;
         g_cumsum += decay;
 
         // Reduction: find max g_cumsum across heads (max = least negative = slowest head)
@@ -66,7 +71,7 @@ __global__ void get_warmup_chunks_kernel(
 
         // Simple tree reduction for max
         for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
-            if (h < stride && h + stride < H) {
+            if (h < stride) {
                 smem[h] = fmaxf(smem[h], smem[h + stride]);
             }
             __syncthreads();
@@ -109,8 +114,10 @@ void get_warmup_chunks_cuda(
     auto g_flat = g.reshape({-1, H, D});  // [T, H, D]
 
     dim3 grid(N);
-    dim3 block(H);
-    int smem_size = H * sizeof(float);
+    int block_size = 1;
+    while (block_size < H) block_size <<= 1;
+    dim3 block(block_size);
+    int smem_size = block_size * sizeof(float);
 
     cudaStream_t stream = at::cuda::getCurrentCUDAStream().stream();
 
