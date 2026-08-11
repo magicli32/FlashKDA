@@ -1,3 +1,4 @@
+import os
 import math
 
 import torch
@@ -184,10 +185,14 @@ def _calc_cp_seqs(cu_seqlens, num_heads, chunk_size=CHUNK_SIZE):
     H = num_heads
     total_chunks = sum(num_chunks)
 
-    max_local_chunks = 2 ** round(
-        math.log2(math.sqrt(H * total_chunks / sm_count) * 3)
-    )
-    max_local_chunks = max(max_local_chunks, 4)
+    forced_pieces = int(os.environ.get("FLASHKDA_FORCE_CP_PIECES", "0"))
+    if forced_pieces > 0:
+        max_local_chunks = max(math.ceil(max(num_chunks) / forced_pieces), 1)
+    else:
+        max_local_chunks = 2 ** round(
+            math.log2(math.sqrt(H * total_chunks / sm_count) * 3)
+        )
+        max_local_chunks = max(max_local_chunks, 4)
 
     max_local_tokens = max_local_chunks * chunk_size
 
@@ -215,7 +220,7 @@ def _calc_cp_seqs(cu_seqlens, num_heads, chunk_size=CHUNK_SIZE):
     # With 2 passes, each pass is roughly half the work; break-even requires
     # Be*H < SM_COUNT/2 approximately.  At H=32 on a 78-SM GPU, utilization
     # is only 41%, so CP still provides meaningful parallelism for long seqs.
-    use_cp = Be * H <= sm_count // 2
+    use_cp = forced_pieces > 0 or Be * H <= sm_count // 2
 
     if not use_cp:
         return False, None, None, None

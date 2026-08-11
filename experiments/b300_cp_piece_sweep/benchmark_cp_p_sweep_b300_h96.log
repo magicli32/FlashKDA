@@ -1,0 +1,53 @@
+GPU: NVIDIA B300 SXM6 AC
+SM count: 148
+shape: (1, 8192, 96, 128)
+pieces: [2, 4, 8, 16]
+warmup / iters / repeats: 30 200 5
+
+=== correctness ===
+P=2: max_diff=0.00000000, mean_diff=0.00000000, rel_err=0.00000000, RESULT=PASS
+P=4: max_diff=0.00000000, mean_diff=0.00000000, rel_err=0.00000000, RESULT=PASS
+P=8: max_diff=0.00000000, mean_diff=0.00000000, rel_err=0.00000000, RESULT=PASS
+P=16: max_diff=0.00000000, mean_diff=0.00000000, rel_err=0.00000000, RESULT=PASS
+
+=== warmup ===
+fwd warmup done
+cp_p2 warmup done
+cp_p4 warmup done
+cp_p8 warmup done
+cp_p16 warmup done
+
+=== benchmark ===
+repeat 1: fwd=1.027739 ms, cp_p2=1.110404 ms, cp_p4=1.064818 ms, cp_p8=1.088879 ms, cp_p16=1.225662 ms
+repeat 2: fwd=1.027549 ms, cp_p2=1.107722 ms, cp_p4=1.063735 ms, cp_p8=1.092102 ms, cp_p16=1.226135 ms
+repeat 3: fwd=1.027593 ms, cp_p2=1.109174 ms, cp_p4=1.065146 ms, cp_p8=1.088446 ms, cp_p16=1.225543 ms
+repeat 4: fwd=1.027545 ms, cp_p2=1.108560 ms, cp_p4=1.063962 ms, cp_p8=1.089390 ms, cp_p16=1.225834 ms
+repeat 5: fwd=1.027476 ms, cp_p2=1.108208 ms, cp_p4=1.064588 ms, cp_p8=1.088927 ms, cp_p16=1.225222 ms
+
+=== summary ===
+fwd_times_ms: [1.027739, 1.027549, 1.027593, 1.027545, 1.027476]
+fwd_median_ms: 1.027549
+
+P=2_times_ms: [1.110404, 1.107722, 1.109174, 1.10856, 1.108208]
+P=2_median_ms: 1.10856
+P=2_speedup: 0.9269 x
+P=2_latency_improvement: -7.88 %
+
+P=4_times_ms: [1.064818, 1.063735, 1.065146, 1.063962, 1.064588]
+P=4_median_ms: 1.064588
+P=4_speedup: 0.9652 x
+P=4_latency_improvement: -3.6 %
+
+P=8_times_ms: [1.088879, 1.092102, 1.088446, 1.08939, 1.088927]
+P=8_median_ms: 1.088927
+P=8_speedup: 0.9436 x
+P=8_latency_improvement: -5.97 %
+
+P=16_times_ms: [1.225662, 1.226135, 1.225543, 1.225834, 1.225222]
+P=16_median_ms: 1.225662
+P=16_speedup: 0.8384 x
+P=16_latency_improvement: -19.28 %
+
+BEST: fwd
+BEST_median_ms: 1.027549
+BEST_vs_fwd_speedup: 1.0 x

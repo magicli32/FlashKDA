@@ -1,0 +1,13 @@
+Generating SQLite file nsys_flashkda_b300.sqlite from nsys_flashkda_b300.nsys-rep
+Processing [nsys_flashkda_b300.sqlite] with [/opt/nvidia/nsight-systems/2025.3.2/host-linux-x64/reports/cuda_gpu_kern_sum.py]... 
+
+ ** CUDA GPU Kernel Summary (cuda_gpu_kern_sum):
+
++----------+-----------------+-----------+----------+----------+----------+----------+-------------+------------------------------------------------------------------------------------------------------+
+| Time (%) | Total Time (us) | Instances | Avg (us) | Med (us) | Min (us) | Max (us) | StdDev (us) |                                                 Name                                                 |
++----------+-----------------+-----------+----------+----------+----------+----------+-------------+------------------------------------------------------------------------------------------------------+
+|     72.8 |         746.056 |         1 |  746.056 |  746.056 |  746.056 |  746.056 |       0.000 | void _flash_kda_fwd_recurrence<cute::TiledCopy<cute::Copy_Atom<cute::Copy_Traits<cute::SM90_TMA_LOA… |
+|     26.7 |         273.602 |         1 |  273.602 |  273.602 |  273.602 |  273.602 |       0.000 | void _flash_kda_fwd_prepare<cute::TiledCopy<cute::Copy_Atom<cute::Copy_Traits<cute::SM90_TMA_LOAD, … |
+|      0.5 |           5.248 |         1 |    5.248 |    5.248 |    5.248 |    5.248 |       0.000 | void at::native::elementwise_kernel<(int)128, (int)4, void at::native::gpu_kernel_impl_nocast<at::n… |
++----------+-----------------+-----------+----------+----------+----------+----------+-------------+------------------------------------------------------------------------------------------------------+
+

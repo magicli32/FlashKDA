@@ -1,0 +1,16 @@
+GPU: NVIDIA B300 SXM6 AC
+shape: (1, 8192, 96, 128)
+pieces: 8
+warmup / iters / repeats: 30 200 5
+repeat 1: fwd=1.027734 ms, cp_p8=1.090017 ms, speedup=0.9429x
+repeat 2: fwd=1.027779 ms, cp_p8=1.089867 ms, speedup=0.9430x
+repeat 3: fwd=1.027771 ms, cp_p8=1.088528 ms, speedup=0.9442x
+repeat 4: fwd=1.027519 ms, cp_p8=1.088867 ms, speedup=0.9437x
+repeat 5: fwd=1.027573 ms, cp_p8=1.088525 ms, speedup=0.9440x
+
+fwd_times_ms: [1.027734, 1.027779, 1.027771, 1.027519, 1.027573]
+cp_p8_times_ms: [1.090017, 1.089867, 1.088528, 1.088867, 1.088525]
+fwd_median_ms: 1.027734
+cp_p8_median_ms: 1.088867
+median_speedup: 0.9439 x
+latency_improvement: -5.95 %

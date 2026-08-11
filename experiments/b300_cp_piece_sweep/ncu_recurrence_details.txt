@@ -1,0 +1,211 @@
+[2087358] python3.12@127.0.0.1
+  void _flash_kda_fwd_recurrence<TiledCopy<Copy_Atom<Copy_Traits<SM90_TMA_LOAD, C<2048>, AuxTmaParams<tuple<ScaledBasis<C<1>, 2>, ScaledBasis<C<1>, 1>, ScaledBasis<int, 0>>, const Layout<tuple<C<8>, C<16>, C<1>>, tuple<ScaledBasis<C<1>, 2>, ScaledBasis<C<1>, 1>, ScaledBasis<C<1>, 0>>> &, const Swizzle<0, 4, 3> &>>, bfloat16_t>, Layout<tuple<C<1>, tuple<tuple<tuple<C<8>, C<16>>, C<16>>>>, tuple<C<0>, tuple<tuple<tuple<C<16>, C<1>>, C<128>>>>>, tuple<C<1>, C<16>, C<128>>>, TiledCopy<Copy_Atom<Copy_Traits<SM90_TMA_LOAD, C<512>, AuxTmaParams<tuple<ScaledBasis<C<1>, 0>>, const Layout<tuple<C<32>>, tuple<ScaledBasis<C<1>, 0>>> &, const Swizzle<0, 4, 3> &>>, bfloat16_t>, Layout<tuple<C<1>, tuple<tuple<C<32>, C<1>>>>, tuple<C<0>, tuple<tuple<C<1>, C<0>>>>>, tuple<C<32>>>, TiledCopy<Copy_Atom<Copy_Traits<SM90_TMA_LOAD, C<2048>, AuxTmaParams<tuple<ScaledBasis<C<1>, 2>, ScaledBasis<C<1>, 1>, ScaledBasis<C<1>, 0>>, const Layout<tuple<C<8>, C<16>, C<1>>, tuple<ScaledBasis<C<1>, 2>, ScaledBasis<C<1>, 1>, ScaledBasis<C<1>, 0>>> &, const Swizzle<0, 4, 3> &>>, bfloat16_t>, Layout<tuple<C<1>, tuple<tuple<tuple<C<8>, C<16>>, C<16>>>>, tuple<C<0>, tuple<tuple<tuple<C<16>, C<1>>, C<128>>>>>, tuple<C<1>, C<16>, C<128>>>, TiledCopy<Copy_Atom<Copy_Traits<SM90_TMA_LOAD, C<2048>, AuxTmaParams<tuple<ScaledBasis<C<1>, 2>, ScaledBasis<C<1>, 1>, ScaledBasis<C<1>, 0>>, const Layout<tuple<C<8>, C<16>, C<1>>, tuple<ScaledBasis<C<1>, 2>, ScaledBasis<C<1>, 1>, ScaledBasis<C<1>, 0>>> &, const Swizzle<0, 4, 3> &>>, bfloat16_t>, Layout<tuple<C<1>, tuple<tuple<tuple<C<8>, C<16>>, C<16>>>>, tuple<C<0>, tuple<tuple<tuple<C<16>, C<1>>, C<128>>>>>, tuple<C<1>, C<16>, C<128>>>, TiledCopy<Copy_Atom<Copy_Traits<SM90_TMA_LOAD, C<2048>, AuxTmaParams<tuple<ScaledBasis<C<1>, 2>, ScaledBasis<C<1>, 1>, ScaledBasis<C<1>, 0>>, const Layout<tuple<C<8>, C<16>, C<1>>, tuple<ScaledBasis<C<1>, 2>, ScaledBasis<C<1>, 1>, ScaledBasis<C<1>, 0>>> &, const Swizzle<0, 4, 3> &>>, bfloat16_t>, Layout<tuple<C<1>, tuple<tuple<tuple<C<8>, C<16>>, C<16>>>>, tuple<C<0>, tuple<tuple<tuple<C<16>, C<1>>, C<128>>>>>, tuple<C<1>, C<16>, C<128>>>, TiledCopy<Copy_Atom<Copy_Traits<SM90_TMA_LOAD, C<4096>, AuxTmaParams<tuple<ScaledBasis<C<1>, 1>, ScaledBasis<C<1>, 0>>, const Layout<tuple<C<128>, C<1>>, tuple<ScaledBasis<C<1>, 1>, ScaledBasis<C<1>, 0>>> &, const Swizzle<0, 4, 3> &>>, float>, Layout<tuple<C<1>, tuple<tuple<C<128>, C<1>>>>, tuple<C<0>, tuple<tuple<C<1>, C<0>>>>>, tuple<C<1>, C<128>>>, TiledCopy<Copy_Atom<Copy_Traits<SM90_TMA_LOAD, C<2048>, AuxTmaParams<tuple<ScaledBasis<C<1>, 2>, ScaledBasis<C<1>, 1>, ScaledBasis<C<1>, 0>>, const Layout<tuple<C<8>, C<16>, C<1>>, tuple<ScaledBasis<C<1>, 2>, ScaledBasis<C<1>, 1>, ScaledBasis<C<1>, 0>>> &, const Swizzle<0, 4, 3> &>>, bfloat16_t>, Layout<tuple<C<1>, tuple<tuple<tuple<C<8>, C<16>>, C<2>>>>, tuple<C<0>, tuple<tuple<tuple<C<16>, C<1>>, C<128>>>>>, tuple<C<1>, C<16>, C<16>>>, TiledCopy<Copy_Atom<Copy_Traits<SM90_TMA_LOAD, C<2048>, AuxTmaParams<tuple<ScaledBasis<C<1>, 2>, ScaledBasis<C<1>, 1>, ScaledBasis<C<1>, 0>>, const Layout<tuple<C<8>, C<16>, C<1>>, tuple<ScaledBasis<C<1>, 2>, ScaledBasis<C<1>, 1>, ScaledBasis<C<1>, 0>>> &, const Swizzle<0, 4, 3> &>>, bfloat16_t>, Layout<tuple<C<1>, tuple<tuple<tuple<C<8>, C<16>>, C<2>>>>, tuple<C<0>, tuple<tuple<tuple<C<16>, C<1>>, C<128>>>>>, tuple<C<1>, C<16>, C<16>>>, TiledCopy<Copy_Atom<Copy_Traits<SM90_TMA_LOAD, C<16384>, AuxTmaParams<tuple<ScaledBasis<C<1>, 2>, ScaledBasis<C<1>, 1>, ScaledBasis<C<1>, 0>>, const Layout<tuple<C<8>, C<128>, C<1>>, tuple<ScaledBasis<C<1>, 2>, ScaledBasis<C<1>, 1>, ScaledBasis<C<1>, 0>>> &, const Swizzle<0, 4, 3> &>>, bfloat16_t>, Layout<tuple<C<1>, tuple<tuple<tuple<C<8>, C<128>>, C<16>>>>, tuple<C<0>, tuple<tuple<tuple<C<128>, C<1>>, C<1024>>>>>, tuple<C<1>, C<128>, C<128>>>, TiledCopy<Copy_Atom<Copy_Traits<SM90_TMA_STORE, C<16384>, AuxTmaParams<tuple<ScaledBasis<C<1>, 2>, ScaledBasis<C<1>, 1>, ScaledBasis<C<1>, 0>>, const Layout<tuple<C<8>, C<128>, C<1>>, tuple<ScaledBasis<C<1>, 2>, ScaledBasis<C<1>, 1>, ScaledBasis<C<1>, 0>>> &, const Swizzle<0, 4, 3> &>>, bfloat16_t>, Layout<tuple<C<1>, tuple<tuple<tuple<C<8>, C<128>>, C<16>>>>, tuple<C<0>, tuple<tuple<tuple<C<128>, C<1>>, C<1024>>>>>, tuple<C<1>, C<128>, C<128>>>, TiledCopy<Copy_Atom<Copy_Traits<SM90_TMA_STORE, C<2048>, AuxTmaParams<tuple<ScaledBasis<C<1>, 2>, ScaledBasis<C<1>, 1>, ScaledBasis<int, 0>>, const Layout<tuple<C<8>, C<16>, C<1>>, tuple<ScaledBasis<C<1>, 2>, ScaledBasis<C<1>, 1>, ScaledBasis<C<1>, 0>>> &, const Swizzle<0, 4, 3> &>>, bfloat16_t>, Layout<tuple<C<1>, tuple<tuple<tuple<C<8>, C<16>>, C<16>>>>, tuple<C<0>, tuple<tuple<tuple<C<16>, C<1>>, C<128>>>>>, tuple<C<1>, C<16>, C<128>>>, 16, 128, 3, 2, 192, 1, 1, 0, 0>(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, bfloat16_t *, int, int, int, const long *, int) (1, 96, 1)x(192, 1, 1), Context 1, Stream 7, Device 0, CC 10.3
+    Section: GPU Speed Of Light Throughput
+    ----------------------- ----------- ------------
+    Metric Name             Metric Unit Metric Value
+    ----------------------- ----------- ------------
+    DRAM Frequency                  Ghz         4.00
+    SM Frequency                    Ghz         1.09
+    Elapsed Cycles                cycle      1414748
+    Memory Throughput                 %        38.08
+    DRAM Throughput                   %        10.83
+    Duration                         ms         1.29
+    L1/TEX Cache Throughput           %        59.85
+    L2 Cache Throughput               %        19.86
+    SM Active Cycles              cycle    898743.61
+    Compute (SM) Throughput           %        20.83
+    ----------------------- ----------- ------------
+
+    OPT   This kernel grid is too small to fill the available resources on this device, resulting in only 0.3 full      
+          waves across all SMs. Look at Launch Statistics for more details.                                             
+
+    Section: GPU Speed Of Light Roofline Chart
+    INF   The ratio of peak float (FP32) to double (FP64) performance on this device is 64:1. The workload achieved 3%  
+          of this device's FP32 peak performance and 0% of its FP64 peak performance. See the Profiling Guide           
+          (https://docs.nvidia.com/nsight-compute/ProfilingGuide/index.html#roofline) for more details on roofline      
+          analysis.                                                                                                     
+
+    Section: PM Sampling
+    ------------------------- ----------- ------------
+    Metric Name               Metric Unit Metric Value
+    ------------------------- ----------- ------------
+    Maximum Buffer Size             Mbyte        60.75
+    Maximum Sampling Interval          us            1
+    # Pass Groups                                    2
+    ------------------------- ----------- ------------
+
+    Section: Compute Workload Analysis
+    -------------------- ----------- ------------
+    Metric Name          Metric Unit Metric Value
+    -------------------- ----------- ------------
+    Executed Ipc Active   inst/cycle         1.31
+    Executed Ipc Elapsed  inst/cycle         0.83
+    Issue Slots Busy               %        20.83
+    Issued Ipc Active     inst/cycle         1.31
+    SM Busy                        %        20.83
+    -------------------- ----------- ------------
+
+    OPT   Est. Local Speedup: 80.44%                                                                                    
+          All compute pipelines are under-utilized. Either this workload is very small or it doesn't issue enough warps 
+          per scheduler. Check the Launch Statistics and Scheduler Statistics sections for further details.             
+
+    Section: Memory Workload Analysis
+    -------------------------------------- ----------- ------------
+    Metric Name                            Metric Unit Metric Value
+    -------------------------------------- ----------- ------------
+    Local Memory Spilling Requests                                0
+    Local Memory Spilling Request Overhead           %            0
+    Memory Throughput                          Gbyte/s       830.60
+    Mem Busy                                         %        38.08
+    Max Bandwidth                                    %        25.86
+    L1/TEX Hit Rate                                  %            0
+    L2 Persisting Size                           Mbyte        24.87
+    L2 Compression Success Rate                      %            0
+    L2 Compression Ratio                             %            0
+    L2 Compression Input Sectors                sector         1880
+    L2 Hit Rate                                      %        51.33
+    Mem Pipes Busy                                   %        10.82
+    -------------------------------------- ----------- ------------
+
+    Section: Memory Workload Analysis Chart
+    OPT   Est. Speedup: 8.939%                                                                                          
+          Out of the 60160.0 bytes sent to the L2 Compression unit only 0.00% were successfully compressed. To increase 
+          this success rate, consider marking only those memory regions as compressible that contain the most zero      
+          values and/or expose the most homogeneous values.                                                             
+
+    Section: Scheduler Statistics
+    ---------------------------- ----------- ------------
+    Metric Name                  Metric Unit Metric Value
+    ---------------------------- ----------- ------------
+    One or More Eligible                   %        32.74
+    Issued Warp Per Scheduler                        0.33
+    No Eligible                            %        67.26
+    Active Warps Per Scheduler          warp         1.50
+    Eligible Warps Per Scheduler        warp         0.35
+    ---------------------------- ----------- ------------
+
+    OPT   Est. Local Speedup: 61.92%                                                                                    
+          Every scheduler is capable of issuing one instruction per cycle, but for this workload each scheduler only    
+          issues an instruction every 3.1 cycles. This might leave hardware resources underutilized and may lead to     
+          less optimal performance. Out of the maximum of 16 warps per scheduler, this workload allocates an average    
+          of 1.50 active warps per scheduler, but only an average of 0.35 warps were eligible per cycle. Eligible       
+          warps are the subset of active warps that are ready to issue their next instruction. Every cycle with no      
+          eligible warp results in no instruction being issued and the issue slot remains unused. To increase the       
+          number of eligible warps, reduce the time the active warps are stalled by inspecting the top stall reasons    
+          on the Warp State Statistics and Source Counters sections.                                                    
+
+    Section: Warp State Statistics
+    ---------------------------------------- ----------- ------------
+    Metric Name                              Metric Unit Metric Value
+    ---------------------------------------- ----------- ------------
+    Warp Cycles Per Issued Instruction             cycle         4.58
+    Warp Cycles Per Executed Instruction           cycle         4.59
+    Avg. Active Threads Per Warp                                27.38
+    Avg. Not Predicated Off Threads Per Warp                    27.16
+    ---------------------------------------- ----------- ------------
+
+    Section: Instruction Statistics
+    ---------------------------------------- ----------- ------------
+    Metric Name                              Metric Unit Metric Value
+    ---------------------------------------- ----------- ------------
+    Avg. Executed Instructions Per Scheduler        inst    293562.03
+    Executed Instructions                           inst    173788722
+    Avg. Issued Instructions Per Scheduler          inst    294203.65
+    Issued Instructions                             inst    174168562
+    ---------------------------------------- ----------- ------------
+
+    Section: Launch Statistics
+    -------------------------------- --------------- ---------------
+    Metric Name                          Metric Unit    Metric Value
+    -------------------------------- --------------- ---------------
+    Block Size                                                   192
+    Cluster Scheduling Policy                           PolicySpread
+    Cluster Size                                                   0
+    Function Cache Configuration                     CachePreferNone
+    Grid Size                                                     96
+    Preferred Cluster Size                                         0
+    Registers Per Thread             register/thread              73
+    Shared Memory Configuration Size           Kbyte          200.70
+    Driver Shared Memory Per Block       Kbyte/block            1.02
+    Dynamic Shared Memory Per Block      Kbyte/block           98.43
+    Static Shared Memory Per Block        byte/block               0
+    # SMs                                         SM             148
+    Stack Size                                                  1024
+    Threads                                   thread           18432
+    # TPCs                                                        74
+    Enabled TPC IDs                                              all
+    Uses Green Context                                             0
+    Waves Per SM                                                0.32
+    -------------------------------- --------------- ---------------
+
+    OPT   Est. Speedup: 35.14%                                                                                          
+          The grid for this launch is configured to execute only 96 blocks, which is less than the GPU's 148            
+          multiprocessors. This can underutilize some multiprocessors. If you do not intend to execute this kernel      
+          concurrently with other workloads, consider reducing the block size to have at least one block per            
+          multiprocessor or increase the size of the grid to fully utilize the available hardware resources. See the    
+          Hardware Model (https://docs.nvidia.com/nsight-compute/ProfilingGuide/index.html#metrics-hw-model)            
+          description for more details on launch configurations.                                                        
+
+    Section: Occupancy
+    ------------------------------- ----------- ------------
+    Metric Name                     Metric Unit Metric Value
+    ------------------------------- ----------- ------------
+    Max Active Clusters                 cluster            0
+    Max Cluster Size                      block            8
+    Overall GPU Occupancy                     %            0
+    Cluster Occupancy                         %            0
+    Block Limit Barriers                  block            7
+    Block Limit SM                        block           32
+    Block Limit Registers                 block            4
+    Block Limit Shared Mem                block            2
+    Block Limit Warps                     block           10
+    Theoretical Active Warps per SM        warp           12
+    Theoretical Occupancy                     %        18.75
+    Achieved Occupancy                        %         9.37
+    Achieved Active Warps Per SM           warp         6.00
+    ------------------------------- ----------- ------------
+
+    OPT   Est. Speedup: 61.92%                                                                                          
+          The 3.00 theoretical warps per scheduler this kernel can issue according to its occupancy are below the       
+          hardware maximum of 16. This kernel's theoretical occupancy (18.8%) is limited by the required amount of      
+          shared memory.                                                                                                
+
+    Section: GPU and Memory Workload Distribution
+    -------------------------- ----------- ------------
+    Metric Name                Metric Unit Metric Value
+    -------------------------- ----------- ------------
+    Average DRAM Active Cycles       cycle    524044.12
+    Total DRAM Elapsed Cycles        cycle    330442496
+    Average L1 Active Cycles         cycle    898743.61
+    Total L1 Elapsed Cycles          cycle    209052250
+    Average L2 Active Cycles         cycle   1985553.30
+    Total L2 Elapsed Cycles          cycle    369886092
+    Average SM Active Cycles         cycle    898743.61
+    Total SM Elapsed Cycles          cycle    209052250
+    Average SMSP Active Cycles       cycle    898484.60
+    Total SMSP Elapsed Cycles        cycle    836209000
+    -------------------------- ----------- ------------
+
+    OPT   Est. Speedup: 22.85%                                                                                          
+          One or more SMs have a much lower number of active cycles than the average number of active cycles. Maximum   
+          instance value is 35.92% above the average, while the minimum instance value is 100.00% below the average.    
+    ----- --------------------------------------------------------------------------------------------------------------
+    OPT   Est. Speedup: 22.84%                                                                                          
+          One or more SMSPs have a much lower number of active cycles than the average number of active cycles. Maximum 
+          instance value is 35.91% above the average, while the minimum instance value is 100.00% below the average.    
+    ----- --------------------------------------------------------------------------------------------------------------
+    OPT   Est. Speedup: 22.85%                                                                                          
+          One or more L1 Slices have a much lower number of active cycles than the average number of active cycles.     
+          Maximum instance value is 35.92% above the average, while the minimum instance value is 100.00% below the     
+          average.                                                                                                      
+
+    Section: Source Counters
+    ------------------------- ----------- ------------
+    Metric Name               Metric Unit Metric Value
+    ------------------------- ----------- ------------
+    Branch Instructions Ratio           %         0.02
+    Branch Instructions              inst      4277541
+    Branch Efficiency                   %        99.98
+    Avg. Divergent Branches      branches         0.65
+    ------------------------- ----------- ------------
+
