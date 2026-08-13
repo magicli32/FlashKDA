@@ -154,9 +154,64 @@ void launch_fwd(
     auto [tma_load_initial_state, tma_store_final_state] = make_state_tma();
 
 #if BLOCK_LEVEL_K1 >= 0
-    // P0-A: signalling validation only. K1 and K2 still execute on the
-    // same stream, so all ready flags should already be visible to K2.
     cudaMemsetAsync(ws_ready, 0, ready_bytes, stream);
+#endif
+
+    // ============================================================
+    // P0-B: experimental K1 producer / K2 consumer overlap.
+    //
+    // For now, enable it only for our primary fixed benchmark:
+    //   N=1, T=8192, H=96, D=128.
+    //
+    // All other shapes keep the original same-stream scheduling.
+    // ============================================================
+    bool use_k1k2_overlap = false;
+    cudaStream_t k1_stream = stream;
+    cudaEvent_t producer_done_event = nullptr;
+
+#if BLOCK_LEVEL_K1 >= 0 && BLOCK_LEVEL_K2 >= 0
+    if constexpr (!IsVarlen) {
+        use_k1k2_overlap =
+            (N == 1 && T_total == 8192 && H == 96);
+    }
+
+    if (use_k1k2_overlap) {
+        // Cached per-host-thread objects: avoid stream/event creation
+        // overhead on every ~1 ms forward call.
+        static thread_local cudaStream_t producer_stream = nullptr;
+        static thread_local cudaEvent_t producer_start_event = nullptr;
+        static thread_local cudaEvent_t producer_done_event_tls = nullptr;
+
+        if (producer_stream == nullptr) {
+            cudaStreamCreateWithFlags(
+                &producer_stream,
+                cudaStreamNonBlocking
+            );
+
+            cudaEventCreateWithFlags(
+                &producer_start_event,
+                cudaEventDisableTiming
+            );
+
+            cudaEventCreateWithFlags(
+                &producer_done_event_tls,
+                cudaEventDisableTiming
+            );
+        }
+
+        // Everything already queued on the PyTorch/current stream
+        // (including ready memset and upstream tensor producers)
+        // must become visible before K1 starts.
+        cudaEventRecord(producer_start_event, stream);
+        cudaStreamWaitEvent(
+            producer_stream,
+            producer_start_event,
+            0
+        );
+
+        k1_stream = producer_stream;
+        producer_done_event = producer_done_event_tls;
+    }
 #endif
 
     // ===== Launch Kernel 1 (prepare) =====
@@ -185,7 +240,7 @@ void launch_fwd(
         dim3 grid_k1(total_tiles, H);
         dim3 block_k1(kK1Threads);
 
-        kernel1<<<grid_k1, block_k1, smem_size_k1, stream>>>(
+        kernel1<<<grid_k1, block_k1, smem_size_k1, k1_stream>>>(
             tma_load_q, tma_load_k, tma_load_beta,
             tma_load_g, tma_load_dt_bias,
             tma_store_ws_kd, tma_store_ws_qd, tma_store_ws_kr,
@@ -193,6 +248,13 @@ void launch_fwd(
             scale, T_total, H, N, cu_seqlens_ptr, total_tiles,
             A_log_ptr, gate_scale, ws_tile_prefix, ws_ready
         );
+
+        if (use_k1k2_overlap) {
+            cudaEventRecord(
+                producer_done_event,
+                k1_stream
+            );
+        }
     }
 #endif
 
@@ -229,6 +291,14 @@ void launch_fwd(
             out_ptr, T_total, H, N, cu_seqlens_ptr, total_tiles,
             ws_ready
         );
+
+        if (use_k1k2_overlap) {
+            cudaStreamWaitEvent(
+                stream,
+                producer_done_event,
+                0
+            );
+        }
     }
 #endif
 }
