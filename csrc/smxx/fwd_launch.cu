@@ -167,7 +167,10 @@ void launch_fwd(
     // ============================================================
     bool use_k1k2_overlap = false;
     cudaStream_t k1_stream = stream;
+    cudaStream_t k2_stream = stream;
+
     cudaEvent_t producer_done_event = nullptr;
+    cudaEvent_t consumer_done_event = nullptr;
 
 #if BLOCK_LEVEL_K1 >= 0 && BLOCK_LEVEL_K2 >= 0
     if constexpr (!IsVarlen) {
@@ -179,13 +182,37 @@ void launch_fwd(
         // Cached per-host-thread objects: avoid stream/event creation
         // overhead on every ~1 ms forward call.
         static thread_local cudaStream_t producer_stream = nullptr;
+        static thread_local cudaStream_t consumer_stream = nullptr;
+
         static thread_local cudaEvent_t producer_start_event = nullptr;
         static thread_local cudaEvent_t producer_done_event_tls = nullptr;
+        static thread_local cudaEvent_t consumer_done_event_tls = nullptr;
 
         if (producer_stream == nullptr) {
-            cudaStreamCreateWithFlags(
+            int minPriority = 0;
+            int maxPriority = 0;
+
+            cudaDeviceGetStreamPriorityRange(
+                &minPriority,
+                &maxPriority
+            );
+
+            // CUDA docs:
+            //   minPriority -> lowest-priority stream
+            //   maxPriority -> highest-priority stream
+            //
+            // K1 is the producer and gets the lower scheduling priority.
+            cudaStreamCreateWithPriority(
                 &producer_stream,
-                cudaStreamNonBlocking
+                cudaStreamNonBlocking,
+                minPriority
+            );
+
+            // K2 is the latency-critical recurrent consumer.
+            cudaStreamCreateWithPriority(
+                &consumer_stream,
+                cudaStreamNonBlocking,
+                maxPriority
             );
 
             cudaEventCreateWithFlags(
@@ -195,6 +222,11 @@ void launch_fwd(
 
             cudaEventCreateWithFlags(
                 &producer_done_event_tls,
+                cudaEventDisableTiming
+            );
+
+            cudaEventCreateWithFlags(
+                &consumer_done_event_tls,
                 cudaEventDisableTiming
             );
         }
@@ -209,8 +241,17 @@ void launch_fwd(
             0
         );
 
+        cudaStreamWaitEvent(
+            consumer_stream,
+            producer_start_event,
+            0
+        );
+
         k1_stream = producer_stream;
+        k2_stream = consumer_stream;
+
         producer_done_event = producer_done_event_tls;
+        consumer_done_event = consumer_done_event_tls;
     }
 #endif
 
@@ -281,7 +322,7 @@ void launch_fwd(
         dim3 grid_k2(N, H);
         dim3 block_k2(kK2Threads);
 
-        kernel2<<<grid_k2, block_k2, smem_size_k2, stream>>>(
+        kernel2<<<grid_k2, block_k2, smem_size_k2, k2_stream>>>(
             tma_load_v, tma_load_beta2,
             tma_load_ws_kd, tma_load_ws_qd, tma_load_ws_kr,
             tma_load_ws_gt, tma_load_ws_inv, tma_load_ws_mqk,
@@ -293,6 +334,20 @@ void launch_fwd(
         );
 
         if (use_k1k2_overlap) {
+            cudaEventRecord(
+                consumer_done_event,
+                k2_stream
+            );
+
+            // Join the asynchronous DAG back to the caller stream.
+            // The benchmark's end event will therefore measure the
+            // complete K1/K2 pipeline, not just host launch latency.
+            cudaStreamWaitEvent(
+                stream,
+                consumer_done_event,
+                0
+            );
+
             cudaStreamWaitEvent(
                 stream,
                 producer_done_event,
