@@ -207,22 +207,36 @@ void launch_fwd(
                 &maxPriority
             );
 
-            // CUDA docs:
-            //   minPriority -> lowest-priority stream
-            //   maxPriority -> highest-priority stream
-            //
-            // K1 is the producer and gets the lower scheduling priority.
+            // K1 always stays at the lowest/default priority.
             cudaStreamCreateWithPriority(
                 &producer_stream,
                 cudaStreamNonBlocking,
                 minPriority
             );
 
-            // K2 is the latency-critical recurrent consumer.
+            // P0-F:
+            // Select K2 priority at runtime so the exact same binary can
+            // sweep the producer/consumer scheduling tradeoff.
+            int consumerPriority = maxPriority;
+
+            if (const char* env =
+                    std::getenv("FLASH_KDA_K2_PRIORITY")) {
+                consumerPriority = std::atoi(env);
+            }
+
+            // Clamp to the meaningful device range.
+            // On B300 measured range is [-5, 0].
+            if (consumerPriority < maxPriority) {
+                consumerPriority = maxPriority;
+            }
+            if (consumerPriority > minPriority) {
+                consumerPriority = minPriority;
+            }
+
             cudaStreamCreateWithPriority(
                 &consumer_stream,
                 cudaStreamNonBlocking,
-                maxPriority
+                consumerPriority
             );
 
             cudaEventCreateWithFlags(
