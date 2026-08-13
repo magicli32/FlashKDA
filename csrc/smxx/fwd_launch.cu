@@ -2,6 +2,8 @@
 #include "fwd_kernel1.cuh"
 #include "fwd_kernel2.cuh"
 
+#include <cstdlib>
+
 // ==================== launch_fwd ====================
 template <int D, bool HasStateIn, bool HasStateOut, bool StateFP32, bool IsVarlen>
 void launch_fwd(
@@ -178,6 +180,14 @@ void launch_fwd(
             (N == 1 && T_total == 8192 && H == 96);
     }
 
+    // Benchmark/debug switch: allow the exact same binary to fall back
+    // to serial K1 -> K2 scheduling.
+    if (const char* env = std::getenv("FLASH_KDA_DISABLE_K1K2_OVERLAP")) {
+        if (std::atoi(env) != 0) {
+            use_k1k2_overlap = false;
+        }
+    }
+
     if (use_k1k2_overlap) {
         // Cached per-host-thread objects: avoid stream/event creation
         // overhead on every ~1 ms forward call.
@@ -262,6 +272,28 @@ void launch_fwd(
         using SharedStorageK1T = SharedStorageK1<K1L>;
         int smem_size_k1 = sizeof(SharedStorageK1T);
 
+        // P0-E: optional occupancy throttle for the K1 producer.
+        //
+        // Read only once per process. Each benchmark sweep value is
+        // run in a separate Python process.
+        static int k1_reserved_smem = []() {
+            const char* env = std::getenv("FLASH_KDA_K1_RESERVE_KB");
+
+            if (env == nullptr) {
+                return 0;
+            }
+
+            int kb = std::atoi(env);
+            return kb > 0 ? kb * 1024 : 0;
+        }();
+
+        int smem_size_k1_launch = smem_size_k1;
+
+        if (use_k1k2_overlap &&
+            k1_reserved_smem > smem_size_k1_launch) {
+            smem_size_k1_launch = k1_reserved_smem;
+        }
+
         auto kernel1 = _flash_kda_fwd_prepare<
             decltype(tma_load_q), decltype(tma_load_k),
             decltype(tma_load_beta),
@@ -271,7 +303,11 @@ void launch_fwd(
             CHUNK, D, kK1Threads, IsVarlen
         >;
 
-        cudaFuncSetAttribute(kernel1, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size_k1);
+        cudaFuncSetAttribute(
+            kernel1,
+            cudaFuncAttributeMaxDynamicSharedMemorySize,
+            smem_size_k1_launch
+        );
 
         if constexpr (IsVarlen) {
             _flash_kda_build_tile_prefix<<<1, 32, 0, stream>>>(
@@ -284,7 +320,7 @@ void launch_fwd(
 
         dim3 block_k1(kK1Threads);
 
-        kernel1<<<grid_k1, block_k1, smem_size_k1, k1_stream>>>(
+        kernel1<<<grid_k1, block_k1, smem_size_k1_launch, k1_stream>>>(
             tma_load_q, tma_load_k, tma_load_beta,
             tma_load_g, tma_load_dt_bias,
             tma_store_ws_kd, tma_store_ws_qd, tma_store_ws_kr,
