@@ -166,8 +166,25 @@ __global__ void __launch_bounds__(NumThreads, 8) _flash_kda_fwd_prepare(
     SharedStorageT& shared_storage = *reinterpret_cast<SharedStorageT*>(shared_mem);
 
     // --- per-CTA tile info
-    int global_tile_idx = blockIdx.x;
-    int head_idx = blockIdx.y;
+    int global_tile_idx;
+    int head_idx;
+
+    if (gridDim.y == 1) {
+        // P0-D overlap path: t-major producer ordering.
+        //
+        // task:
+        //   [t0,h0] [t0,h1] ... [t0,hH-1]
+        //   [t1,h0] [t1,h1] ...
+        int task = int(blockIdx.x);
+
+        head_idx = task % H;
+        global_tile_idx = task / H;
+    } else {
+        // Original FlashKDA mapping.
+        global_tile_idx = int(blockIdx.x);
+        head_idx = int(blockIdx.y);
+    }
+
     int seq_idx, tiles_before, local_t;
     int64_t bos, eos;
     int seq_len, t_tiles_this_seq;

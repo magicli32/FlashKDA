@@ -278,7 +278,10 @@ void launch_fwd(
                 cu_seqlens_ptr, N, CHUNK, ws_tile_prefix);
         }
 
-        dim3 grid_k1(total_tiles, H);
+        dim3 grid_k1 = use_k1k2_overlap
+            ? dim3(total_tiles * H, 1, 1)
+            : dim3(total_tiles, H, 1);
+
         dim3 block_k1(kK1Threads);
 
         kernel1<<<grid_k1, block_k1, smem_size_k1, k1_stream>>>(
