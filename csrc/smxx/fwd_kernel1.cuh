@@ -136,7 +136,8 @@ __global__ void __launch_bounds__(NumThreads, 8) _flash_kda_fwd_prepare(
     int total_tiles,
     float const* A_log_ptr,
     float gate_scale,
-    int const* tile_prefix
+    int const* tile_prefix,
+    uint32_t* ws_ready
 ) {
     // --- constants
     using BF16 = cutlass::bfloat16_t;
@@ -514,8 +515,9 @@ __global__ void __launch_bounds__(NumThreads, 8) _flash_kda_fwd_prepare(
     // Fence + sync combined: completion + TMA visibility
     cutlass::arch::fence_view_async_shared();
     __syncthreads();
+    int ws_idx = head_idx * total_tiles + global_tile_idx;
+
     if (threadIdx.x == 0) {
-        int ws_idx = head_idx * total_tiles + global_tile_idx;
         // Store k_decayed [CHUNK, D] bf16
         {
             auto g_ws = tma_store_ws_kd.get_tma_tensor(make_shape(H * total_tiles, CHUNK, D));
@@ -585,4 +587,13 @@ __global__ void __launch_bounds__(NumThreads, 8) _flash_kda_fwd_prepare(
     }
     tma_store_wait<0>();
     __syncthreads();
+
+    // Publish this workspace tile only after all asynchronous TMA stores
+    // have completed.
+    if (threadIdx.x == 0) {
+        cuda::atomic_ref<uint32_t, cuda::thread_scope_device>
+            ready_ref(ws_ready[ws_idx]);
+
+        ready_ref.store(1u, cuda::memory_order_release);
+    }
 }

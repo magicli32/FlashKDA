@@ -70,6 +70,16 @@ void launch_fwd(
 
     int* ws_tile_prefix = reinterpret_cast<int*>(ws + n_ht * WS::kPerTile);
 
+    int64_t tile_prefix_bytes =
+        (int64_t(N + 1) * int64_t(sizeof(int)) + 127) / 128 * 128;
+
+    uint32_t* ws_ready = reinterpret_cast<uint32_t*>(
+        reinterpret_cast<char*>(ws_tile_prefix) + tile_prefix_bytes
+    );
+
+    int64_t ready_bytes =
+        (n_ht * int64_t(sizeof(uint32_t)) + 127) / 128 * 128;
+
     auto ws_kd_gmem_layout = make_layout(make_shape(int(n_ht), CHUNK, D), LayoutRight{});
     auto ws_qd_gmem_layout = ws_kd_gmem_layout;
     auto ws_kr_gmem_layout = ws_kd_gmem_layout;
@@ -143,6 +153,12 @@ void launch_fwd(
     };
     auto [tma_load_initial_state, tma_store_final_state] = make_state_tma();
 
+#if BLOCK_LEVEL_K1 >= 0
+    // P0-A: signalling validation only. K1 and K2 still execute on the
+    // same stream, so all ready flags should already be visible to K2.
+    cudaMemsetAsync(ws_ready, 0, ready_bytes, stream);
+#endif
+
     // ===== Launch Kernel 1 (prepare) =====
 #if BLOCK_LEVEL_K1 >= 0
     {
@@ -175,7 +191,7 @@ void launch_fwd(
             tma_store_ws_kd, tma_store_ws_qd, tma_store_ws_kr,
             tma_store_ws_gt, tma_store_ws_inv, tma_store_ws_mqk,
             scale, T_total, H, N, cu_seqlens_ptr, total_tiles,
-            A_log_ptr, gate_scale, ws_tile_prefix
+            A_log_ptr, gate_scale, ws_tile_prefix, ws_ready
         );
     }
 #endif
@@ -210,7 +226,8 @@ void launch_fwd(
             tma_load_initial_state,
             tma_store_final_state,
             tma_store_out,
-            out_ptr, T_total, H, N, cu_seqlens_ptr, total_tiles
+            out_ptr, T_total, H, N, cu_seqlens_ptr, total_tiles,
+            ws_ready
         );
     }
 #endif

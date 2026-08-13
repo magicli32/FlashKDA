@@ -22,7 +22,13 @@ int64_t get_workspace_size(
     // Trailing buffer for the tile prefix-sum (N+1 int32), 128-byte aligned.
     int64_t tile_prefix_bytes = ((N + 1) * 4 + 127) / 128 * 128;
 
-    return H * total_tiles * per_tile_bytes + tile_prefix_bytes;
+    // One ready flag for every (head, tile).
+    int64_t ready_bytes =
+        (H * total_tiles * int64_t(sizeof(uint32_t)) + 127) / 128 * 128;
+
+    return H * total_tiles * per_tile_bytes
+         + tile_prefix_bytes
+         + ready_bytes;
 }
 
 void fwd(

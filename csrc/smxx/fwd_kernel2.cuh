@@ -147,7 +147,8 @@ __global__ void __launch_bounds__(NumThreads) _flash_kda_fwd_recurrence(
     int H,
     int N,
     int64_t const* cu_seqlens,
-    int total_tiles
+    int total_tiles,
+    uint32_t* ws_ready
 ) {
     using BF16 = cutlass::bfloat16_t;
     using FP16 = cutlass::half_t;
@@ -366,6 +367,21 @@ __global__ void __launch_bounds__(NumThreads) _flash_kda_fwd_recurrence(
             Tensor s_beta_tile = make_tensor(make_smem_ptr(shared_storage.input[stage].beta.begin()), TMABetaSmemLayout{});
             cute::copy(tma_load_beta.with(*tma_barrier),
                 cta_tma_load_beta.partition_S(g_beta_tile), cta_tma_load_beta.partition_D(s_beta_tile));
+
+#if BLOCK_LEVEL_K1 >= 0
+            // v and beta do not depend on K1. They have already been issued
+            // before waiting for the corresponding workspace tile.
+            cuda::atomic_ref<uint32_t, cuda::thread_scope_device>
+                ready_ref(ws_ready[ws_idx]);
+
+            while (ready_ref.load(cuda::memory_order_acquire) == 0u) {
+                __nanosleep(64);
+            }
+
+            // The readiness flag is observed by the generic proxy while the
+            // following workspace reads are issued through the TMA async proxy.
+            asm volatile("fence.proxy.async.global;" ::: "memory");
+#endif
 
             // TMA load workspace: k_decayed
             {
