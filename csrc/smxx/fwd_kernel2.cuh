@@ -130,7 +130,7 @@ template <
     bool StateFP32 = false,
     bool IsVarlen = true
 >
-__global__ void __maxnreg__(120) _flash_kda_fwd_recurrence_bf16(
+__global__ void __launch_bounds__(NumThreads, 1) _flash_kda_fwd_recurrence_bf16(
     CUTE_GRID_CONSTANT TmaLoadV const tma_load_v,
     CUTE_GRID_CONSTANT TmaLoadBeta const tma_load_beta,
     CUTE_GRID_CONSTANT TmaLoadWsKD const tma_load_ws_kd,
@@ -427,6 +427,78 @@ __global__ void __maxnreg__(120) _flash_kda_fwd_recurrence_bf16(
 #endif
         int compute_tid = threadIdx.x;
 
+        // ========================================================
+        // P2: register-resident recurrent state
+        //
+        // Each of the four MMA warps owns 32 state/output columns:
+        //   warp 0 -> columns   0..31
+        //   warp 1 -> columns  32..63
+        //   warp 2 -> columns  64..95
+        //   warp 3 -> columns  96..127
+        //
+        // Load the warp-owned 128x32 BF16 state from shared memory
+        // exactly once.  It then survives in registers across all
+        // chunks of this sequence.
+        // ========================================================
+        Tensor resident_s_acc_T = make_tensor(
+            make_smem_ptr(shared_storage.state_acc.begin()),
+            TransposedStateSmemLayout{});
+
+        auto resident_mma = make_tiled_mma(
+            MMA_Atom<SM80_16x8x16_F32BF16BF16F32_TN>{},
+            Layout<Shape<_1,_1>>{},
+            Tile<_16,_16,_16>{}
+        );
+
+        const int resident_warp_id = compute_tid / 32;
+        const int resident_lane_id = compute_tid % 32;
+
+        auto resident_thr_mma =
+            resident_mma.get_slice(resident_lane_id);
+
+        auto resident_load_c = make_tiled_copy_C(
+            Copy_Atom<SM75_U16x8_LDSM_T, BF16>{},
+            resident_mma);
+
+        auto resident_thr_load_c =
+            resident_load_c.get_slice(resident_lane_id);
+
+        Tensor resident_state_ref = local_tile(
+            resident_s_acc_T,
+            make_shape(Int<16>{}, Int<16>{}),
+            make_coord(0, resident_warp_id * 2));
+
+        auto resident_c_ref =
+            resident_thr_mma.partition_C(resident_state_ref);
+
+        using ResidentStateFragment =
+            decltype(make_fragment_like<BF16>(
+                resident_thr_mma.make_fragment_C(resident_c_ref)));
+
+        constexpr int kResidentStateRowBlocks = D / 16;
+
+        ResidentStateFragment
+            resident_state[2][kResidentStateRowBlocks];
+
+        #pragma unroll
+        for (int m = 0; m < kResidentStateRowBlocks; ++m) {
+            #pragma unroll
+            for (int bi = 0; bi < 2; ++bi) {
+                Tensor state_block = local_tile(
+                    resident_s_acc_T,
+                    make_shape(Int<16>{}, Int<16>{}),
+                    make_coord(
+                        m,
+                        resident_warp_id * 2 + bi));
+
+                copy(
+                    resident_load_c,
+                    resident_thr_load_c.partition_S(state_block),
+                    resident_thr_load_c.retile_D(
+                        resident_state[bi][m]));
+            }
+        }
+
         for (int t = 0; t < t_tiles; ++t) {
 #ifndef TMA_DISABLE_ALL
             store_pipeline.producer_acquire(out_write);
@@ -509,8 +581,6 @@ __global__ void __maxnreg__(120) _flash_kda_fwd_recurrence_bf16(
             auto tCrAi_q_view = smem_thr_copy_A.retile_D(tCrAi_q);
             auto tCrA_q = thr_mma.partition_fragment_A(A_ref);
 
-            Tensor tCrBi = make_fragment_like<BF16>(thr_mma.partition_fragment_B(B_ref));
-            auto tCrBi_view = smem_thr_copy_B.retile_D(tCrBi);
             auto tCrB = thr_mma.partition_fragment_B(B_ref);
 
             auto tCrC_ref = thr_mma.partition_C(C_ref);
@@ -527,40 +597,122 @@ __global__ void __maxnreg__(120) _flash_kda_fwd_recurrence_bf16(
             for (int i = 0; i < 2; ++i) { out_acc[i] = thr_mma.make_fragment_C(tCrC_ref); clear(out_acc[i]); }
 
             // ======== Phase 1: Dual GEMM k@s and q@s (k-loop, 2 blocks per warp) ========
-            constexpr int K_BLOCKS = decltype(cute::size<1>(k_decayed))::value / 16;
+            //
+            // State is no longer loaded from shared memory here.
+            // resident_state is stored in the MMA-C fragment layout.
+            // MOVM_T converts that C fragment directly into the MMA-B
+            // register layout consumed by k@s / q@s.
+            constexpr int K_BLOCKS =
+                decltype(cute::size<1>(k_decayed))::value / 16;
 
-            copy(smem_tiled_copy_A, smem_thr_copy_A.partition_S(
-                local_tile(k_decayed, make_shape(Int<16>{}, Int<16>{}), make_coord(0, 0))), tCrAi_k_view);
-            copy(smem_tiled_copy_A, smem_thr_copy_A.partition_S(
-                local_tile(q_decayed, make_shape(Int<16>{}, Int<16>{}), make_coord(0, 0))), tCrAi_q_view);
-            copy(smem_tiled_copy_B, smem_thr_copy_B.partition_S(
-                local_tile(s_acc, make_shape(Int<16>{}, Int<16>{}), make_coord(warp_id * 2, 0))), tCrBi_view);
+            static_assert(
+                K_BLOCKS == kResidentStateRowBlocks,
+                "resident state row blocking must match Phase1 K blocking");
+
+            copy(
+                smem_tiled_copy_A,
+                smem_thr_copy_A.partition_S(
+                    local_tile(
+                        k_decayed,
+                        make_shape(Int<16>{}, Int<16>{}),
+                        make_coord(0, 0))),
+                tCrAi_k_view);
+
+            copy(
+                smem_tiled_copy_A,
+                smem_thr_copy_A.partition_S(
+                    local_tile(
+                        q_decayed,
+                        make_shape(Int<16>{}, Int<16>{}),
+                        make_coord(0, 0))),
+                tCrAi_q_view);
 
             #pragma unroll
             for (int k = 0; k < K_BLOCKS; ++k) {
-                cute::transform(tCrAi_k, tCrA_k, cute::identity{});
-                cute::transform(tCrAi_q, tCrA_q, cute::identity{});
-                cute::transform(tCrBi, tCrB, cute::identity{});
+                cute::transform(
+                    tCrAi_k, tCrA_k, cute::identity{});
+                cute::transform(
+                    tCrAi_q, tCrA_q, cute::identity{});
 
-                copy(smem_tiled_copy_B, smem_thr_copy_B.partition_S(
-                    local_tile(s_acc, make_shape(Int<16>{}, Int<16>{}), make_coord(warp_id * 2 + 1, k))), tCrBi_view);
+                // resident_state[0][k]:
+                // C-fragment layout -> B-fragment layout.
+                uint32_t* state_c =
+                    reinterpret_cast<uint32_t*>(
+                        &resident_state[0][k](0));
+                uint32_t* state_b =
+                    reinterpret_cast<uint32_t*>(
+                        &tCrB(0));
 
-                gemm(thr_mma, tCrA_k(_,_,Int<0>{}), tCrB(_,_,Int<0>{}), u_acc[0]);
-                gemm(thr_mma, tCrA_q(_,_,Int<0>{}), tCrB(_,_,Int<0>{}), out_acc[0]);
+                SM75_U32x1_MOVM_T::copy(
+                    state_c[0], state_b[0]);
+                SM75_U32x1_MOVM_T::copy(
+                    state_c[1], state_b[1]);
+                SM75_U32x1_MOVM_T::copy(
+                    state_c[2], state_b[2]);
+                SM75_U32x1_MOVM_T::copy(
+                    state_c[3], state_b[3]);
 
-                cute::transform(tCrBi, tCrB, cute::identity{});
+                gemm(
+                    thr_mma,
+                    tCrA_k(_,_,Int<0>{}),
+                    tCrB(_,_,Int<0>{}),
+                    u_acc[0]);
+
+                gemm(
+                    thr_mma,
+                    tCrA_q(_,_,Int<0>{}),
+                    tCrB(_,_,Int<0>{}),
+                    out_acc[0]);
+
+                // resident_state[1][k]
+                state_c =
+                    reinterpret_cast<uint32_t*>(
+                        &resident_state[1][k](0));
+
+                SM75_U32x1_MOVM_T::copy(
+                    state_c[0], state_b[0]);
+                SM75_U32x1_MOVM_T::copy(
+                    state_c[1], state_b[1]);
+                SM75_U32x1_MOVM_T::copy(
+                    state_c[2], state_b[2]);
+                SM75_U32x1_MOVM_T::copy(
+                    state_c[3], state_b[3]);
 
                 if (k + 1 < K_BLOCKS) {
-                    copy(smem_tiled_copy_A, smem_thr_copy_A.partition_S(
-                        local_tile(k_decayed, make_shape(Int<16>{}, Int<16>{}), make_coord(0, k + 1))), tCrAi_k_view);
-                    copy(smem_tiled_copy_A, smem_thr_copy_A.partition_S(
-                        local_tile(q_decayed, make_shape(Int<16>{}, Int<16>{}), make_coord(0, k + 1))), tCrAi_q_view);
-                    copy(smem_tiled_copy_B, smem_thr_copy_B.partition_S(
-                        local_tile(s_acc, make_shape(Int<16>{}, Int<16>{}), make_coord(warp_id * 2, k + 1))), tCrBi_view);
+                    copy(
+                        smem_tiled_copy_A,
+                        smem_thr_copy_A.partition_S(
+                            local_tile(
+                                k_decayed,
+                                make_shape(
+                                    Int<16>{},
+                                    Int<16>{}),
+                                make_coord(0, k + 1))),
+                        tCrAi_k_view);
+
+                    copy(
+                        smem_tiled_copy_A,
+                        smem_thr_copy_A.partition_S(
+                            local_tile(
+                                q_decayed,
+                                make_shape(
+                                    Int<16>{},
+                                    Int<16>{}),
+                                make_coord(0, k + 1))),
+                        tCrAi_q_view);
                 }
 
-                gemm(thr_mma, tCrA_k(_,_,Int<0>{}), tCrB(_,_,Int<0>{}), u_acc[1]);
-                gemm(thr_mma, tCrA_q(_,_,Int<0>{}), tCrB(_,_,Int<0>{}), out_acc[1]);
+                gemm(
+                    thr_mma,
+                    tCrA_k(_,_,Int<0>{}),
+                    tCrB(_,_,Int<0>{}),
+                    u_acc[1]);
+
+                gemm(
+                    thr_mma,
+                    tCrA_q(_,_,Int<0>{}),
+                    tCrB(_,_,Int<0>{}),
+                    out_acc[1]);
             }
 
             // ======== Phase 2: Cast out (keep in regs), load v/INV/beta ========
@@ -652,33 +804,53 @@ __global__ void __maxnreg__(120) _flash_kda_fwd_recurrence_bf16(
                 copy(smem_tiled_store_C, smem_thr_store_C.retile_S(out_bf16[i]), smem_thr_store_C.partition_D(out_block));
             }
 
-            // ======== Phase 6: s_acc update ========
-            // s_acc[D, D] = s_acc * g_total + k_restored_t[D, 16] @ U[16, D]
-            // Each warp handles columns [warp_id*32, (warp_id+1)*32] = 2 x 16x16 blocks
-            // U is already in tCrB_u_arr[0..1] as B operands (from Phase 4 MOVM_T)
-            constexpr int S_M_BLOCKS = decltype(cute::size<0>(k_restored_t))::value / 16;
+            // ======== Phase 6: resident state update ========
+            //
+            // resident_state =
+            //     resident_state * g_total
+            //   + k_restored^T @ U
+            //
+            // No state shared-memory round trip occurs between chunks.
+            constexpr int S_M_BLOCKS =
+                decltype(cute::size<0>(k_restored_t))::value / 16;
 
-            Tensor tCrAi_kr = make_fragment_like<BF16>(thr_mma.partition_fragment_A(A_ref));
-            auto tCrAi_kr_view = smem_thr_copy_A_T.retile_D(tCrAi_kr);
+            static_assert(
+                S_M_BLOCKS == kResidentStateRowBlocks,
+                "Phase6 blocking must match resident state blocking");
+
+            Tensor tCrAi_kr =
+                make_fragment_like<BF16>(
+                    thr_mma.partition_fragment_A(A_ref));
+
+            auto tCrAi_kr_view =
+                smem_thr_copy_A_T.retile_D(tCrAi_kr);
 
             AFragT ring_A_kr[PREFETCH];
-            SFragT ring_S_acc[2][PREFETCH];
-            float ring_g0[PREFETCH], ring_g1[PREFETCH];
+            float ring_g0[PREFETCH];
+            float ring_g1[PREFETCH];
 
             #pragma unroll
             for (int i = 0; i < PREFETCH; ++i) {
-                Tensor kr_block = local_tile(k_restored_t, make_shape(Int<16>{}, Int<16>{}), make_coord(i, 0));
-                copy(smem_tiled_copy_A_T, smem_thr_copy_A_T.partition_S(kr_block), tCrAi_kr_view);
-                cute::transform(tCrAi_kr, ring_A_kr[i], cute::identity{});
+                Tensor kr_block = local_tile(
+                    k_restored_t,
+                    make_shape(Int<16>{}, Int<16>{}),
+                    make_coord(i, 0));
 
-                #pragma unroll
-                for (int bi = 0; bi < 2; ++bi) {
-                    Tensor s_block = local_tile(s_acc_T, make_shape(Int<16>{}, Int<16>{}), make_coord(i, warp_id * 2 + bi));
-                    copy(smem_tiled_load_C_T, smem_thr_load_C_T.partition_S(s_block), smem_thr_load_C_T.retile_D(ring_S_acc[bi][i]));
-                }
+                copy(
+                    smem_tiled_copy_A_T,
+                    smem_thr_copy_A_T.partition_S(kr_block),
+                    tCrAi_kr_view);
 
-                ring_g0[i] = g_total(i * 16 + group_id);
-                ring_g1[i] = g_total(i * 16 + group_id + 8);
+                cute::transform(
+                    tCrAi_kr,
+                    ring_A_kr[i],
+                    cute::identity{});
+
+                ring_g0[i] =
+                    g_total(i * 16 + group_id);
+
+                ring_g1[i] =
+                    g_total(i * 16 + group_id + 8);
             }
 
             #pragma unroll
@@ -691,37 +863,99 @@ __global__ void __maxnreg__(120) _flash_kda_fwd_recurrence_bf16(
                 #pragma unroll
                 for (int bi = 0; bi < 2; ++bi) {
                     clear(u_acc[bi]);
-                    gemm(thr_mma, ring_A_kr[slot](_,_,Int<0>{}), tCrB_u_arr[bi](_,_,Int<0>{}), u_acc[bi]);
+
+                    gemm(
+                        thr_mma,
+                        ring_A_kr[slot](_,_,Int<0>{}),
+                        tCrB_u_arr[bi](_,_,Int<0>{}),
+                        u_acc[bi]);
                 }
 
                 if (m + PREFETCH < S_M_BLOCKS) {
-                    Tensor kr_next = local_tile(k_restored_t, make_shape(Int<16>{}, Int<16>{}), make_coord(m + PREFETCH, 0));
-                    copy(smem_tiled_copy_A_T, smem_thr_copy_A_T.partition_S(kr_next), tCrAi_kr_view);
-                    cute::transform(tCrAi_kr, ring_A_kr[slot], cute::identity{});
+                    Tensor kr_next = local_tile(
+                        k_restored_t,
+                        make_shape(Int<16>{}, Int<16>{}),
+                        make_coord(m + PREFETCH, 0));
 
-                    ring_g0[slot] = g_total((m + PREFETCH) * 16 + group_id);
-                    ring_g1[slot] = g_total((m + PREFETCH) * 16 + group_id + 8);
+                    copy(
+                        smem_tiled_copy_A_T,
+                        smem_thr_copy_A_T.partition_S(kr_next),
+                        tCrAi_kr_view);
+
+                    cute::transform(
+                        tCrAi_kr,
+                        ring_A_kr[slot],
+                        cute::identity{});
+
+                    ring_g0[slot] =
+                        g_total(
+                            (m + PREFETCH) * 16 +
+                            group_id);
+
+                    ring_g1[slot] =
+                        g_total(
+                            (m + PREFETCH) * 16 +
+                            group_id + 8);
                 }
 
                 #pragma unroll
                 for (int bi = 0; bi < 2; ++bi) {
+                    auto& state_fragment =
+                        resident_state[bi][m];
+
                     #pragma unroll
-                    for (int a = 0; a < 2; ++a) {
+                    for (int aa = 0; aa < 2; ++aa) {
                         #pragma unroll
-                        for (int d = 0; d < 2; ++d) {
-                            auto c0 = make_coord(make_coord(a, 0), 0, d);
-                            auto c1 = make_coord(make_coord(a, 1), 0, d);
-                            ring_S_acc[bi][slot](c0) = BF16(bf16_to_f32(ring_S_acc[bi][slot](c0)) * g0 + u_acc[bi](c0));
-                            ring_S_acc[bi][slot](c1) = BF16(bf16_to_f32(ring_S_acc[bi][slot](c1)) * g1 + u_acc[bi](c1));
+                        for (int dd = 0; dd < 2; ++dd) {
+                            auto c0 =
+                                make_coord(
+                                    make_coord(aa, 0),
+                                    0,
+                                    dd);
+
+                            auto c1 =
+                                make_coord(
+                                    make_coord(aa, 1),
+                                    0,
+                                    dd);
+
+                            state_fragment(c0) =
+                                BF16(
+                                    bf16_to_f32(
+                                        state_fragment(c0))
+                                    * g0
+                                    + u_acc[bi](c0));
+
+                            state_fragment(c1) =
+                                BF16(
+                                    bf16_to_f32(
+                                        state_fragment(c1))
+                                    * g1
+                                    + u_acc[bi](c1));
                         }
                     }
 
-                    Tensor s_block = local_tile(s_acc_T, make_shape(Int<16>{}, Int<16>{}), make_coord(m, warp_id * 2 + bi));
-                    copy(smem_tiled_store_C_T, smem_thr_store_C_T.retile_S(ring_S_acc[bi][slot]), smem_thr_store_C_T.partition_D(s_block));
+                    // Only the last chunk exports the resident state
+                    // back to shared memory for the optional final-state
+                    // TMA store.
+                    if constexpr (HasStateOut) {
+                        if (t + 1 == t_tiles) {
+                            Tensor s_block = local_tile(
+                                s_acc_T,
+                                make_shape(
+                                    Int<16>{},
+                                    Int<16>{}),
+                                make_coord(
+                                    m,
+                                    warp_id * 2 + bi));
 
-                    if (m + PREFETCH < S_M_BLOCKS) {
-                        Tensor s_next = local_tile(s_acc_T, make_shape(Int<16>{}, Int<16>{}), make_coord(m + PREFETCH, warp_id * 2 + bi));
-                        copy(smem_tiled_load_C_T, smem_thr_load_C_T.partition_S(s_next), smem_thr_load_C_T.retile_D(ring_S_acc[bi][slot]));
+                            copy(
+                                smem_tiled_store_C_T,
+                                smem_thr_store_C_T.retile_S(
+                                    state_fragment),
+                                smem_thr_store_C_T.partition_D(
+                                    s_block));
+                        }
                     }
                 }
             }
