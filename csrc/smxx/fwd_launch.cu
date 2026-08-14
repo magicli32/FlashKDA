@@ -371,7 +371,7 @@ void launch_fwd(
 
         auto kernel2 = []() {
             if constexpr (StateFP32) {
-                // Keep the exact P0-L FP32 kernel/codegen path.
+                // FP32 keeps the P1/P0-L codegen path.
                 return _flash_kda_fwd_recurrence<
                     decltype(tma_load_v), decltype(tma_load_beta2),
                     decltype(tma_load_ws_kd), decltype(tma_load_ws_qd), decltype(tma_load_ws_kr),
@@ -382,9 +382,23 @@ void launch_fwd(
                     CHUNK, D, kInputStages, kOutputStages, kK2Threads,
                     HasStateIn, HasStateOut, StateFP32, IsVarlen
                 >;
-            } else {
-                // BF16/no-state use the duplicated maxnreg=120 kernel.
+            } else if constexpr (HasStateIn && HasStateOut) {
+                // Stateful BF16:
+                // keep the P2 register-resident recurrent state winner.
                 return _flash_kda_fwd_recurrence_bf16<
+                    decltype(tma_load_v), decltype(tma_load_beta2),
+                    decltype(tma_load_ws_kd), decltype(tma_load_ws_qd), decltype(tma_load_ws_kr),
+                    decltype(tma_load_ws_gt), decltype(tma_load_ws_inv), decltype(tma_load_ws_mqk),
+                    decltype(tma_load_initial_state),
+                    decltype(tma_store_final_state),
+                    decltype(tma_store_out),
+                    CHUNK, D, kInputStages, kOutputStages, kK2Threads,
+                    HasStateIn, HasStateOut, StateFP32, IsVarlen
+                >;
+            } else {
+                // No-state / one-sided BF16:
+                // use the P1 shared-state maxnreg(120) kernel.
+                return _flash_kda_fwd_recurrence_bf16_shared<
                     decltype(tma_load_v), decltype(tma_load_beta2),
                     decltype(tma_load_ws_kd), decltype(tma_load_ws_qd), decltype(tma_load_ws_kr),
                     decltype(tma_load_ws_gt), decltype(tma_load_ws_inv), decltype(tma_load_ws_mqk),
