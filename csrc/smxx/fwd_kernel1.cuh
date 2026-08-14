@@ -534,7 +534,18 @@ __global__ void __launch_bounds__(NumThreads, 8) _flash_kda_fwd_prepare(
     __syncthreads();
     int ws_idx = head_idx * total_tiles + global_tile_idx;
 
-    if (threadIdx.x == 0) {
+    // P0-H:
+    // TMA store completion is thread-local, so use one elected lane
+    // from warp 0 as the sole TMA issuer / waiter / ready publisher.
+    //
+    // All lanes in warp 0 participate in elect_one_sync(); other
+    // warps skip it uniformly.
+    bool tma_store_leader = false;
+    if (threadIdx.x < 32) {
+        tma_store_leader = cute::elect_one_sync();
+    }
+
+    if (tma_store_leader) {
         // Store k_decayed [CHUNK, D] bf16
         {
             auto g_ws = tma_store_ws_kd.get_tma_tensor(make_shape(H * total_tiles, CHUNK, D));
@@ -601,13 +612,12 @@ __global__ void __launch_bounds__(NumThreads, 8) _flash_kda_fwd_prepare(
             cute::copy(tma_store_ws_mqk, cta_tma.partition_S(s_mqk), cta_tma.partition_D(g_ws_tile));
             tma_store_arrive();
         }
-    }
-    tma_store_wait<0>();
-    __syncthreads();
+        // Wait only on the thread that issued the six TMA stores.
+        // wait<0> guarantees its prior bulk async groups are complete.
+        tma_store_wait<0>();
 
-    // Publish this workspace tile only after all asynchronous TMA stores
-    // have completed.
-    if (threadIdx.x == 0) {
+        // Publish this workspace tile only after all asynchronous TMA
+        // stores have completed.
         cuda::atomic_ref<uint32_t, cuda::thread_scope_device>
             ready_ref(ws_ready[ws_idx]);
 
