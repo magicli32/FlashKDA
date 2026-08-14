@@ -130,7 +130,7 @@ template <
     bool StateFP32 = false,
     bool IsVarlen = true
 >
-__global__ void __launch_bounds__(NumThreads) _flash_kda_fwd_recurrence(
+__global__ void __launch_bounds__(NumThreads, 1) _flash_kda_fwd_recurrence(
     CUTE_GRID_CONSTANT TmaLoadV const tma_load_v,
     CUTE_GRID_CONSTANT TmaLoadBeta const tma_load_beta,
     CUTE_GRID_CONSTANT TmaLoadWsKD const tma_load_ws_kd,
