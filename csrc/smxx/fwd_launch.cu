@@ -359,16 +359,33 @@ void launch_fwd(
         using SharedStorageK2T = SharedStorageK2<K2L, kInputStages, kOutputStages>;
         int smem_size_k2 = sizeof(SharedStorageK2T);
 
-        auto kernel2 = _flash_kda_fwd_recurrence<
-            decltype(tma_load_v), decltype(tma_load_beta2),
-            decltype(tma_load_ws_kd), decltype(tma_load_ws_qd), decltype(tma_load_ws_kr),
-            decltype(tma_load_ws_gt), decltype(tma_load_ws_inv), decltype(tma_load_ws_mqk),
-            decltype(tma_load_initial_state),
-            decltype(tma_store_final_state),
-            decltype(tma_store_out),
-            CHUNK, D, kInputStages, kOutputStages, kK2Threads,
-            HasStateIn, HasStateOut, StateFP32, IsVarlen
-        >;
+        auto kernel2 = []() {
+            if constexpr (StateFP32) {
+                // Keep the exact P0-L FP32 kernel/codegen path.
+                return _flash_kda_fwd_recurrence<
+                    decltype(tma_load_v), decltype(tma_load_beta2),
+                    decltype(tma_load_ws_kd), decltype(tma_load_ws_qd), decltype(tma_load_ws_kr),
+                    decltype(tma_load_ws_gt), decltype(tma_load_ws_inv), decltype(tma_load_ws_mqk),
+                    decltype(tma_load_initial_state),
+                    decltype(tma_store_final_state),
+                    decltype(tma_store_out),
+                    CHUNK, D, kInputStages, kOutputStages, kK2Threads,
+                    HasStateIn, HasStateOut, StateFP32, IsVarlen
+                >;
+            } else {
+                // BF16/no-state use the duplicated maxnreg=120 kernel.
+                return _flash_kda_fwd_recurrence_bf16<
+                    decltype(tma_load_v), decltype(tma_load_beta2),
+                    decltype(tma_load_ws_kd), decltype(tma_load_ws_qd), decltype(tma_load_ws_kr),
+                    decltype(tma_load_ws_gt), decltype(tma_load_ws_inv), decltype(tma_load_ws_mqk),
+                    decltype(tma_load_initial_state),
+                    decltype(tma_store_final_state),
+                    decltype(tma_store_out),
+                    CHUNK, D, kInputStages, kOutputStages, kK2Threads,
+                    HasStateIn, HasStateOut, StateFP32, IsVarlen
+                >;
+            }
+        }();
 
         cudaFuncSetAttribute(kernel2, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size_k2);
 
