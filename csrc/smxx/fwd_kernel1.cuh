@@ -547,72 +547,60 @@ __global__ void __launch_bounds__(NumThreads, 8) _flash_kda_fwd_prepare(
     }
 
     if (tma_store_leader) {
-        // Store k_decayed [CHUNK, D] bf16
-        {
-            auto g_ws = tma_store_ws_kd.get_tma_tensor(make_shape(H * total_tiles, CHUNK, D));
-            auto ws_off = g_ws.layout()(ws_idx, 0, 0);
-            Tensor g_ws_tile = make_tensor(g_ws.data() + ws_off,
-                make_layout(make_shape(Int<1>{}, Int<CHUNK>{}, Int<D>{}), stride(g_ws.layout())));
-            Tensor s_kd = make_tensor(make_smem_ptr(shared_storage.k_decayed.begin()), TMAVOLayout{});
-            auto cta_tma = tma_store_ws_kd.get_slice(Int<0>{});
-            cute::copy(tma_store_ws_kd, cta_tma.partition_S(s_kd), cta_tma.partition_D(g_ws_tile));
-            tma_store_arrive();
-        }
-        // Store q_decayed
-        {
-            auto g_ws = tma_store_ws_qd.get_tma_tensor(make_shape(H * total_tiles, CHUNK, D));
-            auto ws_off = g_ws.layout()(ws_idx, 0, 0);
-            Tensor g_ws_tile = make_tensor(g_ws.data() + ws_off,
-                make_layout(make_shape(Int<1>{}, Int<CHUNK>{}, Int<D>{}), stride(g_ws.layout())));
-            Tensor s_qd = make_tensor(make_smem_ptr(shared_storage.q_decayed.begin()), TMAVOLayout{});
-            auto cta_tma = tma_store_ws_qd.get_slice(Int<0>{});
-            cute::copy(tma_store_ws_qd, cta_tma.partition_S(s_qd), cta_tma.partition_D(g_ws_tile));
-            tma_store_arrive();
-        }
-        // Store k_restored
-        {
-            auto g_ws = tma_store_ws_kr.get_tma_tensor(make_shape(H * total_tiles, CHUNK, D));
-            auto ws_off = g_ws.layout()(ws_idx, 0, 0);
-            Tensor g_ws_tile = make_tensor(g_ws.data() + ws_off,
-                make_layout(make_shape(Int<1>{}, Int<CHUNK>{}, Int<D>{}), stride(g_ws.layout())));
-            Tensor s_kr = make_tensor(make_smem_ptr(shared_storage.k_restored.begin()), TMAVOLayout{});
-            auto cta_tma = tma_store_ws_kr.get_slice(Int<0>{});
-            cute::copy(tma_store_ws_kr, cta_tma.partition_S(s_kr), cta_tma.partition_D(g_ws_tile));
-            tma_store_arrive();
-        }
-        // Store g_total [D] float
-        {
-            auto g_ws = tma_store_ws_gt.get_tma_tensor(make_shape(H * total_tiles, D));
-            auto ws_off = g_ws.layout()(ws_idx, 0);
-            Tensor g_ws_tile = make_tensor(g_ws.data() + ws_off,
-                make_layout(make_shape(Int<1>{}, Int<D>{}), stride(g_ws.layout())));
-            Tensor s_gt = make_tensor(make_smem_ptr(shared_storage.g_total.begin()), TMAGTotalSmemLayout{});
-            auto cta_tma = tma_store_ws_gt.get_slice(Int<0>{});
-            cute::copy(tma_store_ws_gt, cta_tma.partition_S(s_gt), cta_tma.partition_D(g_ws_tile));
-            tma_store_arrive();
-        }
-        // Store INV [CHUNK, CHUNK] bf16
-        {
-            auto g_ws = tma_store_ws_inv.get_tma_tensor(make_shape(H * total_tiles, CHUNK, CHUNK));
-            auto ws_off = g_ws.layout()(ws_idx, 0, 0);
-            Tensor g_ws_tile = make_tensor(g_ws.data() + ws_off,
-                make_layout(make_shape(Int<1>{}, Int<CHUNK>{}, Int<CHUNK>{}), stride(g_ws.layout())));
-            Tensor s_inv = make_tensor(make_smem_ptr(shared_storage.INV.begin()), TMALMLayout{});
-            auto cta_tma = tma_store_ws_inv.get_slice(Int<0>{});
-            cute::copy(tma_store_ws_inv, cta_tma.partition_S(s_inv), cta_tma.partition_D(g_ws_tile));
-            tma_store_arrive();
-        }
-        // Store Mqk [CHUNK, CHUNK] bf16
-        {
-            auto g_ws = tma_store_ws_mqk.get_tma_tensor(make_shape(H * total_tiles, CHUNK, CHUNK));
-            auto ws_off = g_ws.layout()(ws_idx, 0, 0);
-            Tensor g_ws_tile = make_tensor(g_ws.data() + ws_off,
-                make_layout(make_shape(Int<1>{}, Int<CHUNK>{}, Int<CHUNK>{}), stride(g_ws.layout())));
-            Tensor s_mqk = make_tensor(make_smem_ptr(shared_storage.Mqk.begin()), TMALMLayout{});
-            auto cta_tma = tma_store_ws_mqk.get_slice(Int<0>{});
-            cute::copy(tma_store_ws_mqk, cta_tma.partition_S(s_mqk), cta_tma.partition_D(g_ws_tile));
-            tma_store_arrive();
-        }
+        // P1-B: publish the byte image of each shared-memory tensor
+        // directly into its private workspace slot.
+        //
+        // K2 restores the exact same byte image into the same shared-memory
+        // layout, so no TensorMap coordinate interpretation is needed here.
+
+        BF16* k_decayed_dst =
+            ws_raw.k_decayed + int64_t(ws_idx) * (CHUNK * D);
+        cute::SM90_BULK_COPY_S2G::copy(
+            shared_storage.k_decayed.begin(),
+            k_decayed_dst,
+            int32_t(CHUNK * D * sizeof(BF16)));
+        tma_store_arrive();
+
+        BF16* q_decayed_dst =
+            ws_raw.q_decayed + int64_t(ws_idx) * (CHUNK * D);
+        cute::SM90_BULK_COPY_S2G::copy(
+            shared_storage.q_decayed.begin(),
+            q_decayed_dst,
+            int32_t(CHUNK * D * sizeof(BF16)));
+        tma_store_arrive();
+
+        BF16* k_restored_dst =
+            ws_raw.k_restored + int64_t(ws_idx) * (CHUNK * D);
+        cute::SM90_BULK_COPY_S2G::copy(
+            shared_storage.k_restored.begin(),
+            k_restored_dst,
+            int32_t(CHUNK * D * sizeof(BF16)));
+        tma_store_arrive();
+
+        float* g_total_dst =
+            ws_raw.g_total + int64_t(ws_idx) * D;
+        cute::SM90_BULK_COPY_S2G::copy(
+            shared_storage.g_total.begin(),
+            g_total_dst,
+            int32_t(D * sizeof(float)));
+        tma_store_arrive();
+
+        BF16* inv_dst =
+            ws_raw.inv + int64_t(ws_idx) * (CHUNK * CHUNK);
+        cute::SM90_BULK_COPY_S2G::copy(
+            shared_storage.INV.begin(),
+            inv_dst,
+            int32_t(CHUNK * CHUNK * sizeof(BF16)));
+        tma_store_arrive();
+
+        BF16* mqk_dst =
+            ws_raw.mqk + int64_t(ws_idx) * (CHUNK * CHUNK);
+        cute::SM90_BULK_COPY_S2G::copy(
+            shared_storage.Mqk.begin(),
+            mqk_dst,
+            int32_t(CHUNK * CHUNK * sizeof(BF16)));
+        tma_store_arrive();
+
         // Wait only on the thread that issued the six TMA stores.
         // wait<0> guarantees its prior bulk async groups are complete.
         tma_store_wait<0>();

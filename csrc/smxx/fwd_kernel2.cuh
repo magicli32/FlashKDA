@@ -327,23 +327,9 @@ __global__ void __maxnreg__(120) _flash_kda_fwd_recurrence_bf16(
         Tensor g_v = tma_load_v.get_tma_tensor(make_shape(H, T_total, D));
         Tensor g_beta = tma_load_beta.get_tma_tensor(make_shape(H * T_total));
 
-        // Workspace gmem tensors
-        auto g_ws_kd = tma_load_ws_kd.get_tma_tensor(make_shape(H * total_tiles, CHUNK, D));
-        auto g_ws_qd = tma_load_ws_qd.get_tma_tensor(make_shape(H * total_tiles, CHUNK, D));
-        auto g_ws_kr = tma_load_ws_kr.get_tma_tensor(make_shape(H * total_tiles, CHUNK, D));
-        auto g_ws_gt = tma_load_ws_gt.get_tma_tensor(make_shape(H * total_tiles, D));
-        auto g_ws_inv = tma_load_ws_inv.get_tma_tensor(make_shape(H * total_tiles, CHUNK, CHUNK));
-        auto g_ws_mqk = tma_load_ws_mqk.get_tma_tensor(make_shape(H * total_tiles, CHUNK, CHUNK));
-
         LoadPipelineState load_write = cutlass::make_producer_start_state<LoadPipeline>();
         auto cta_tma_load_v = tma_load_v.get_slice(Int<0>{});
         auto cta_tma_load_beta = tma_load_beta.get_slice(Int<0>{});
-        auto cta_ws_kd = tma_load_ws_kd.get_slice(Int<0>{});
-        auto cta_ws_qd = tma_load_ws_qd.get_slice(Int<0>{});
-        auto cta_ws_kr = tma_load_ws_kr.get_slice(Int<0>{});
-        auto cta_ws_gt = tma_load_ws_gt.get_slice(Int<0>{});
-        auto cta_ws_inv = tma_load_ws_inv.get_slice(Int<0>{});
-        auto cta_ws_mqk = tma_load_ws_mqk.get_slice(Int<0>{});
 
         for (int t = 0; t < t_tiles; ++t) {
             load_pipeline.producer_acquire(load_write);
@@ -384,54 +370,47 @@ __global__ void __maxnreg__(120) _flash_kda_fwd_recurrence_bf16(
             asm volatile("fence.proxy.async.global;" ::: "memory");
 #endif
 
-            // TMA load workspace: k_decayed
-            {
-                auto off = g_ws_kd.layout()(ws_idx, 0, 0);
-                Tensor g_tile = make_tensor(g_ws_kd.data() + off,
-                    make_layout(make_shape(Int<1>{}, Int<CHUNK>{}, Int<D>{}), stride(g_ws_kd.layout())));
-                Tensor s_tile = make_tensor(make_smem_ptr(shared_storage.input[stage].k_decayed.begin()), TMAVOLayout{});
-                cute::copy(tma_load_ws_kd.with(*tma_barrier), cta_ws_kd.partition_S(g_tile), cta_ws_kd.partition_D(s_tile));
-            }
-            // q_decayed
-            {
-                auto off = g_ws_qd.layout()(ws_idx, 0, 0);
-                Tensor g_tile = make_tensor(g_ws_qd.data() + off,
-                    make_layout(make_shape(Int<1>{}, Int<CHUNK>{}, Int<D>{}), stride(g_ws_qd.layout())));
-                Tensor s_tile = make_tensor(make_smem_ptr(shared_storage.input[stage].q_decayed.begin()), TMAVOLayout{});
-                cute::copy(tma_load_ws_qd.with(*tma_barrier), cta_ws_qd.partition_S(g_tile), cta_ws_qd.partition_D(s_tile));
-            }
-            // k_restored
-            {
-                auto off = g_ws_kr.layout()(ws_idx, 0, 0);
-                Tensor g_tile = make_tensor(g_ws_kr.data() + off,
-                    make_layout(make_shape(Int<1>{}, Int<CHUNK>{}, Int<D>{}), stride(g_ws_kr.layout())));
-                Tensor s_tile = make_tensor(make_smem_ptr(shared_storage.input[stage].k_restored.begin()), TMAVOLayout{});
-                cute::copy(tma_load_ws_kr.with(*tma_barrier), cta_ws_kr.partition_S(g_tile), cta_ws_kr.partition_D(s_tile));
-            }
-            // g_total
-            {
-                auto off = g_ws_gt.layout()(ws_idx, 0);
-                Tensor g_tile = make_tensor(g_ws_gt.data() + off,
-                    make_layout(make_shape(Int<1>{}, Int<D>{}), stride(g_ws_gt.layout())));
-                Tensor s_tile = make_tensor(make_smem_ptr(shared_storage.input[stage].g_total.begin()), TMAGTotalSmemLayout{});
-                cute::copy(tma_load_ws_gt.with(*tma_barrier), cta_ws_gt.partition_S(g_tile), cta_ws_gt.partition_D(s_tile));
-            }
-            // INV
-            {
-                auto off = g_ws_inv.layout()(ws_idx, 0, 0);
-                Tensor g_tile = make_tensor(g_ws_inv.data() + off,
-                    make_layout(make_shape(Int<1>{}, Int<CHUNK>{}, Int<CHUNK>{}), stride(g_ws_inv.layout())));
-                Tensor s_tile = make_tensor(make_smem_ptr(shared_storage.input[stage].INV.begin()), TMALMLayout{});
-                cute::copy(tma_load_ws_inv.with(*tma_barrier), cta_ws_inv.partition_S(g_tile), cta_ws_inv.partition_D(s_tile));
-            }
-            // Mqk
-            {
-                auto off = g_ws_mqk.layout()(ws_idx, 0, 0);
-                Tensor g_tile = make_tensor(g_ws_mqk.data() + off,
-                    make_layout(make_shape(Int<1>{}, Int<CHUNK>{}, Int<CHUNK>{}), stride(g_ws_mqk.layout())));
-                Tensor s_tile = make_tensor(make_smem_ptr(shared_storage.input[stage].Mqk.begin()), TMALMLayout{});
-                cute::copy(tma_load_ws_mqk.with(*tma_barrier), cta_ws_mqk.partition_S(g_tile), cta_ws_mqk.partition_D(s_tile));
-            }
+            // P1-B:
+            // K1 stored the exact shared-memory byte images.
+            // Restore those byte images directly into the matching K2
+            // shared-memory layouts and attach all copies to the same
+            // PipelineTmaAsync transaction barrier.
+
+            cute::SM90_BULK_COPY_G2S::copy(
+                ws_raw.k_decayed + int64_t(ws_idx) * (CHUNK * D),
+                reinterpret_cast<uint64_t*>(tma_barrier),
+                shared_storage.input[stage].k_decayed.begin(),
+                int32_t(CHUNK * D * sizeof(BF16)));
+
+            cute::SM90_BULK_COPY_G2S::copy(
+                ws_raw.q_decayed + int64_t(ws_idx) * (CHUNK * D),
+                reinterpret_cast<uint64_t*>(tma_barrier),
+                shared_storage.input[stage].q_decayed.begin(),
+                int32_t(CHUNK * D * sizeof(BF16)));
+
+            cute::SM90_BULK_COPY_G2S::copy(
+                ws_raw.k_restored + int64_t(ws_idx) * (CHUNK * D),
+                reinterpret_cast<uint64_t*>(tma_barrier),
+                shared_storage.input[stage].k_restored.begin(),
+                int32_t(CHUNK * D * sizeof(BF16)));
+
+            cute::SM90_BULK_COPY_G2S::copy(
+                ws_raw.g_total + int64_t(ws_idx) * D,
+                reinterpret_cast<uint64_t*>(tma_barrier),
+                shared_storage.input[stage].g_total.begin(),
+                int32_t(D * sizeof(float)));
+
+            cute::SM90_BULK_COPY_G2S::copy(
+                ws_raw.inv + int64_t(ws_idx) * (CHUNK * CHUNK),
+                reinterpret_cast<uint64_t*>(tma_barrier),
+                shared_storage.input[stage].INV.begin(),
+                int32_t(CHUNK * CHUNK * sizeof(BF16)));
+
+            cute::SM90_BULK_COPY_G2S::copy(
+                ws_raw.mqk + int64_t(ws_idx) * (CHUNK * CHUNK),
+                reinterpret_cast<uint64_t*>(tma_barrier),
+                shared_storage.input[stage].Mqk.begin(),
+                int32_t(CHUNK * CHUNK * sizeof(BF16)));
 
             ++load_write;
         }
@@ -1070,23 +1049,9 @@ __global__ void __launch_bounds__(NumThreads, 1) _flash_kda_fwd_recurrence(
         Tensor g_v = tma_load_v.get_tma_tensor(make_shape(H, T_total, D));
         Tensor g_beta = tma_load_beta.get_tma_tensor(make_shape(H * T_total));
 
-        // Workspace gmem tensors
-        auto g_ws_kd = tma_load_ws_kd.get_tma_tensor(make_shape(H * total_tiles, CHUNK, D));
-        auto g_ws_qd = tma_load_ws_qd.get_tma_tensor(make_shape(H * total_tiles, CHUNK, D));
-        auto g_ws_kr = tma_load_ws_kr.get_tma_tensor(make_shape(H * total_tiles, CHUNK, D));
-        auto g_ws_gt = tma_load_ws_gt.get_tma_tensor(make_shape(H * total_tiles, D));
-        auto g_ws_inv = tma_load_ws_inv.get_tma_tensor(make_shape(H * total_tiles, CHUNK, CHUNK));
-        auto g_ws_mqk = tma_load_ws_mqk.get_tma_tensor(make_shape(H * total_tiles, CHUNK, CHUNK));
-
         LoadPipelineState load_write = cutlass::make_producer_start_state<LoadPipeline>();
         auto cta_tma_load_v = tma_load_v.get_slice(Int<0>{});
         auto cta_tma_load_beta = tma_load_beta.get_slice(Int<0>{});
-        auto cta_ws_kd = tma_load_ws_kd.get_slice(Int<0>{});
-        auto cta_ws_qd = tma_load_ws_qd.get_slice(Int<0>{});
-        auto cta_ws_kr = tma_load_ws_kr.get_slice(Int<0>{});
-        auto cta_ws_gt = tma_load_ws_gt.get_slice(Int<0>{});
-        auto cta_ws_inv = tma_load_ws_inv.get_slice(Int<0>{});
-        auto cta_ws_mqk = tma_load_ws_mqk.get_slice(Int<0>{});
 
         for (int t = 0; t < t_tiles; ++t) {
             load_pipeline.producer_acquire(load_write);
@@ -1127,54 +1092,47 @@ __global__ void __launch_bounds__(NumThreads, 1) _flash_kda_fwd_recurrence(
             asm volatile("fence.proxy.async.global;" ::: "memory");
 #endif
 
-            // TMA load workspace: k_decayed
-            {
-                auto off = g_ws_kd.layout()(ws_idx, 0, 0);
-                Tensor g_tile = make_tensor(g_ws_kd.data() + off,
-                    make_layout(make_shape(Int<1>{}, Int<CHUNK>{}, Int<D>{}), stride(g_ws_kd.layout())));
-                Tensor s_tile = make_tensor(make_smem_ptr(shared_storage.input[stage].k_decayed.begin()), TMAVOLayout{});
-                cute::copy(tma_load_ws_kd.with(*tma_barrier), cta_ws_kd.partition_S(g_tile), cta_ws_kd.partition_D(s_tile));
-            }
-            // q_decayed
-            {
-                auto off = g_ws_qd.layout()(ws_idx, 0, 0);
-                Tensor g_tile = make_tensor(g_ws_qd.data() + off,
-                    make_layout(make_shape(Int<1>{}, Int<CHUNK>{}, Int<D>{}), stride(g_ws_qd.layout())));
-                Tensor s_tile = make_tensor(make_smem_ptr(shared_storage.input[stage].q_decayed.begin()), TMAVOLayout{});
-                cute::copy(tma_load_ws_qd.with(*tma_barrier), cta_ws_qd.partition_S(g_tile), cta_ws_qd.partition_D(s_tile));
-            }
-            // k_restored
-            {
-                auto off = g_ws_kr.layout()(ws_idx, 0, 0);
-                Tensor g_tile = make_tensor(g_ws_kr.data() + off,
-                    make_layout(make_shape(Int<1>{}, Int<CHUNK>{}, Int<D>{}), stride(g_ws_kr.layout())));
-                Tensor s_tile = make_tensor(make_smem_ptr(shared_storage.input[stage].k_restored.begin()), TMAVOLayout{});
-                cute::copy(tma_load_ws_kr.with(*tma_barrier), cta_ws_kr.partition_S(g_tile), cta_ws_kr.partition_D(s_tile));
-            }
-            // g_total
-            {
-                auto off = g_ws_gt.layout()(ws_idx, 0);
-                Tensor g_tile = make_tensor(g_ws_gt.data() + off,
-                    make_layout(make_shape(Int<1>{}, Int<D>{}), stride(g_ws_gt.layout())));
-                Tensor s_tile = make_tensor(make_smem_ptr(shared_storage.input[stage].g_total.begin()), TMAGTotalSmemLayout{});
-                cute::copy(tma_load_ws_gt.with(*tma_barrier), cta_ws_gt.partition_S(g_tile), cta_ws_gt.partition_D(s_tile));
-            }
-            // INV
-            {
-                auto off = g_ws_inv.layout()(ws_idx, 0, 0);
-                Tensor g_tile = make_tensor(g_ws_inv.data() + off,
-                    make_layout(make_shape(Int<1>{}, Int<CHUNK>{}, Int<CHUNK>{}), stride(g_ws_inv.layout())));
-                Tensor s_tile = make_tensor(make_smem_ptr(shared_storage.input[stage].INV.begin()), TMALMLayout{});
-                cute::copy(tma_load_ws_inv.with(*tma_barrier), cta_ws_inv.partition_S(g_tile), cta_ws_inv.partition_D(s_tile));
-            }
-            // Mqk
-            {
-                auto off = g_ws_mqk.layout()(ws_idx, 0, 0);
-                Tensor g_tile = make_tensor(g_ws_mqk.data() + off,
-                    make_layout(make_shape(Int<1>{}, Int<CHUNK>{}, Int<CHUNK>{}), stride(g_ws_mqk.layout())));
-                Tensor s_tile = make_tensor(make_smem_ptr(shared_storage.input[stage].Mqk.begin()), TMALMLayout{});
-                cute::copy(tma_load_ws_mqk.with(*tma_barrier), cta_ws_mqk.partition_S(g_tile), cta_ws_mqk.partition_D(s_tile));
-            }
+            // P1-B:
+            // K1 stored the exact shared-memory byte images.
+            // Restore those byte images directly into the matching K2
+            // shared-memory layouts and attach all copies to the same
+            // PipelineTmaAsync transaction barrier.
+
+            cute::SM90_BULK_COPY_G2S::copy(
+                ws_raw.k_decayed + int64_t(ws_idx) * (CHUNK * D),
+                reinterpret_cast<uint64_t*>(tma_barrier),
+                shared_storage.input[stage].k_decayed.begin(),
+                int32_t(CHUNK * D * sizeof(BF16)));
+
+            cute::SM90_BULK_COPY_G2S::copy(
+                ws_raw.q_decayed + int64_t(ws_idx) * (CHUNK * D),
+                reinterpret_cast<uint64_t*>(tma_barrier),
+                shared_storage.input[stage].q_decayed.begin(),
+                int32_t(CHUNK * D * sizeof(BF16)));
+
+            cute::SM90_BULK_COPY_G2S::copy(
+                ws_raw.k_restored + int64_t(ws_idx) * (CHUNK * D),
+                reinterpret_cast<uint64_t*>(tma_barrier),
+                shared_storage.input[stage].k_restored.begin(),
+                int32_t(CHUNK * D * sizeof(BF16)));
+
+            cute::SM90_BULK_COPY_G2S::copy(
+                ws_raw.g_total + int64_t(ws_idx) * D,
+                reinterpret_cast<uint64_t*>(tma_barrier),
+                shared_storage.input[stage].g_total.begin(),
+                int32_t(D * sizeof(float)));
+
+            cute::SM90_BULK_COPY_G2S::copy(
+                ws_raw.inv + int64_t(ws_idx) * (CHUNK * CHUNK),
+                reinterpret_cast<uint64_t*>(tma_barrier),
+                shared_storage.input[stage].INV.begin(),
+                int32_t(CHUNK * CHUNK * sizeof(BF16)));
+
+            cute::SM90_BULK_COPY_G2S::copy(
+                ws_raw.mqk + int64_t(ws_idx) * (CHUNK * CHUNK),
+                reinterpret_cast<uint64_t*>(tma_barrier),
+                shared_storage.input[stage].Mqk.begin(),
+                int32_t(CHUNK * CHUNK * sizeof(BF16)));
 
             ++load_write;
         }
