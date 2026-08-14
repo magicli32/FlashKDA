@@ -148,7 +148,8 @@ __global__ void __maxnreg__(120) _flash_kda_fwd_recurrence_bf16(
     int N,
     int64_t const* cu_seqlens,
     int total_tiles,
-    uint32_t* ws_ready
+    uint32_t* ws_ready,
+    K1WorkspaceRawPointers ws_raw
 ) {
     using BF16 = cutlass::bfloat16_t;
     using FP16 = cutlass::half_t;
@@ -890,7 +891,8 @@ __global__ void __launch_bounds__(NumThreads, 1) _flash_kda_fwd_recurrence(
     int N,
     int64_t const* cu_seqlens,
     int total_tiles,
-    uint32_t* ws_ready
+    uint32_t* ws_ready,
+    K1WorkspaceRawPointers ws_raw
 ) {
     using BF16 = cutlass::bfloat16_t;
     using FP16 = cutlass::half_t;

@@ -137,7 +137,8 @@ __global__ void __launch_bounds__(NumThreads, 8) _flash_kda_fwd_prepare(
     float const* A_log_ptr,
     float gate_scale,
     int const* tile_prefix,
-    uint32_t* ws_ready
+    uint32_t* ws_ready,
+    K1WorkspaceRawPointers ws_raw
 ) {
     // --- constants
     using BF16 = cutlass::bfloat16_t;

@@ -70,6 +70,16 @@ void launch_fwd(
     BF16*  ws_inv = reinterpret_cast<BF16*>(ws + n_ht * (WS::kKDecayed + WS::kQDecayed + WS::kKRestored + WS::kGTotal));
     BF16*  ws_mqk = reinterpret_cast<BF16*>(ws + n_ht * (WS::kKDecayed + WS::kQDecayed + WS::kKRestored + WS::kGTotal + WS::kINV));
 
+
+    K1WorkspaceRawPointers ws_raw{
+        ws_kd,
+        ws_qd,
+        ws_kr,
+        ws_gt,
+        ws_inv,
+        ws_mqk
+    };
+
     int* ws_tile_prefix = reinterpret_cast<int*>(ws + n_ht * WS::kPerTile);
 
     int64_t tile_prefix_bytes =
@@ -340,7 +350,7 @@ void launch_fwd(
             tma_store_ws_kd, tma_store_ws_qd, tma_store_ws_kr,
             tma_store_ws_gt, tma_store_ws_inv, tma_store_ws_mqk,
             scale, T_total, H, N, cu_seqlens_ptr, total_tiles,
-            A_log_ptr, gate_scale, ws_tile_prefix, ws_ready
+            A_log_ptr, gate_scale, ws_tile_prefix, ws_ready, ws_raw
         );
 
         if (use_k1k2_overlap) {
@@ -400,7 +410,7 @@ void launch_fwd(
             tma_store_final_state,
             tma_store_out,
             out_ptr, T_total, H, N, cu_seqlens_ptr, total_tiles,
-            ws_ready
+            ws_ready, ws_raw
         );
 
         if (use_k1k2_overlap) {

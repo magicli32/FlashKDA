@@ -77,6 +77,16 @@ struct WorkspaceSizes {
     static constexpr int64_t kPerTile = kKDecayed + kQDecayed + kKRestored + kGTotal + kINV + kMqk;
 };
 
+struct K1WorkspaceRawPointers {
+    cutlass::bfloat16_t* k_decayed = nullptr;
+    cutlass::bfloat16_t* q_decayed = nullptr;
+    cutlass::bfloat16_t* k_restored = nullptr;
+    float* g_total = nullptr;
+    cutlass::bfloat16_t* inv = nullptr;
+    cutlass::bfloat16_t* mqk = nullptr;
+};
+
+
 enum class WarpRole {
     MMA,
     LOAD_QKG,
