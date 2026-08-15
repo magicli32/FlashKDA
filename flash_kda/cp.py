@@ -306,9 +306,30 @@ def fwd_cp(q, k, v, g, beta, scale, out, A_log, dt_bias, lower_bound,
         mt_buffer = None
 
     # --- Step 3: Serial correction → corrected h0 for each sub-segment ---
-    cp_h0 = correct_initial_states(
-        initial_state, ht_buffer, mt_buffer, fallback_mask, seq_map_r2c
-    )
+    use_fast_correction = os.getenv("FLASHKDA_CP_FAST_CORRECTION", "0") == "1"
+
+    if (
+        use_fast_correction
+        and not need_mt
+        and initial_state is None
+        and raw_N == 1
+    ):
+        # Fast path for one original sequence split into CP segments.
+        # With no fallback:
+        #   h0[0] = 0
+        #   h0[i] = ht[i - 1], i > 0
+        #
+        # Avoid the second fallback_mask.any().item(), GPU->CPU seq-map
+        # copy, Python loop, and zeroing memory that is immediately overwritten.
+        cp_h0 = torch.empty_like(ht_buffer)
+        cp_h0[0].zero_()
+
+        if cp_N > 1:
+            cp_h0[1:].copy_(ht_buffer[:-1])
+    else:
+        cp_h0 = correct_initial_states(
+            initial_state, ht_buffer, mt_buffer, fallback_mask, seq_map_r2c
+        )
 
     # --- Step 4: Single forward pass with corrected initial states ---
     use_bf16_resident = os.getenv("FLASHKDA_CP_BF16_RESIDENT", "0") == "1"
