@@ -117,6 +117,10 @@ __global__ void __launch_bounds__(NumThreads) _flash_kda_state_only(
     CUTE_GRID_CONSTANT TmaLoadWsKR const tma_load_ws_kr,
     CUTE_GRID_CONSTANT TmaLoadWsGT const tma_load_ws_gt,
     CUTE_GRID_CONSTANT TmaLoadWsINV const tma_load_ws_inv,
+    cutlass::bfloat16_t const* ws_kd_raw,
+    cutlass::bfloat16_t const* ws_kr_raw,
+    float const* ws_gt_raw,
+    cutlass::bfloat16_t const* ws_inv_raw,
     CUTE_GRID_CONSTANT TmaStoreState const tma_store_final_state,
     int T_total,
     int H,
@@ -225,18 +229,10 @@ __global__ void __launch_bounds__(NumThreads) _flash_kda_state_only(
         Tensor g_v = tma_load_v.get_tma_tensor(make_shape(H, T_total, D));
         Tensor g_beta = tma_load_beta.get_tma_tensor(make_shape(H * T_total));
 
-        auto g_ws_kd = tma_load_ws_kd.get_tma_tensor(make_shape(H * total_tiles, CHUNK, D));
-        auto g_ws_kr = tma_load_ws_kr.get_tma_tensor(make_shape(H * total_tiles, CHUNK, D));
-        auto g_ws_gt = tma_load_ws_gt.get_tma_tensor(make_shape(H * total_tiles, D));
-        auto g_ws_inv = tma_load_ws_inv.get_tma_tensor(make_shape(H * total_tiles, CHUNK, CHUNK));
 
         LoadPipelineState load_write = cutlass::make_producer_start_state<LoadPipeline>();
         auto cta_tma_load_v = tma_load_v.get_slice(Int<0>{});
         auto cta_tma_load_beta = tma_load_beta.get_slice(Int<0>{});
-        auto cta_ws_kd = tma_load_ws_kd.get_slice(Int<0>{});
-        auto cta_ws_kr = tma_load_ws_kr.get_slice(Int<0>{});
-        auto cta_ws_gt = tma_load_ws_gt.get_slice(Int<0>{});
-        auto cta_ws_inv = tma_load_ws_inv.get_slice(Int<0>{});
 
         for (int t = t_start; t < t_tiles; ++t) {
             load_pipeline.producer_acquire(load_write);
@@ -262,44 +258,38 @@ __global__ void __launch_bounds__(NumThreads) _flash_kda_state_only(
             cute::copy(tma_load_beta.with(*tma_barrier),
                 cta_tma_load_beta.partition_S(g_beta_tile), cta_tma_load_beta.partition_D(s_beta_tile));
 
-            // k_decayed
-            {
-                auto off = g_ws_kd.layout()(ws_idx, 0, 0);
-                Tensor g_tile = make_tensor(g_ws_kd.data() + off,
-                    make_layout(make_shape(Int<1>{}, Int<CHUNK>{}, Int<D>{}), stride(g_ws_kd.layout())));
-                Tensor s_tile = make_tensor(make_smem_ptr(shared_storage.input[stage].k_decayed.begin()), TMAVOLayout{});
-                cute::copy(tma_load_ws_kd.with(*tma_barrier), cta_ws_kd.partition_S(g_tile), cta_ws_kd.partition_D(s_tile));
-            }
-            // k_restored
-            {
-                auto off = g_ws_kr.layout()(ws_idx, 0, 0);
-                Tensor g_tile = make_tensor(g_ws_kr.data() + off,
-                    make_layout(make_shape(Int<1>{}, Int<CHUNK>{}, Int<D>{}), stride(g_ws_kr.layout())));
-                Tensor s_tile = make_tensor(make_smem_ptr(shared_storage.input[stage].k_restored.begin()), TMAVOLayout{});
-                cute::copy(tma_load_ws_kr.with(*tma_barrier), cta_ws_kr.partition_S(g_tile), cta_ws_kr.partition_D(s_tile));
-            }
-            // g_total
-            {
-                auto off = g_ws_gt.layout()(ws_idx, 0);
-                Tensor g_tile = make_tensor(g_ws_gt.data() + off,
-                    make_layout(make_shape(Int<1>{}, Int<D>{}), stride(g_ws_gt.layout())));
-                Tensor s_tile = make_tensor(make_smem_ptr(shared_storage.input[stage].g_total.begin()), TMAGTotalSmemLayout{});
-                cute::copy(tma_load_ws_gt.with(*tma_barrier), cta_ws_gt.partition_S(g_tile), cta_ws_gt.partition_D(s_tile));
-            }
-            // INV
-            {
-                auto off = g_ws_inv.layout()(ws_idx, 0, 0);
-                Tensor g_tile = make_tensor(g_ws_inv.data() + off,
-                    make_layout(make_shape(Int<1>{}, Int<CHUNK>{}, Int<CHUNK>{}), stride(g_ws_inv.layout())));
-                Tensor s_tile = make_tensor(make_smem_ptr(shared_storage.input[stage].INV.begin()), TMALMLayout{});
-                cute::copy(tma_load_ws_inv.with(*tma_barrier), cta_ws_inv.partition_S(g_tile), cta_ws_inv.partition_D(s_tile));
-            }
+            // Current workspace ABI:
+            // K1 stores the exact shared-memory byte images.
+            // Restore them verbatim into the identical StateOnly layouts.
 
-            ++load_write;
+            cute::SM90_BULK_COPY_G2S::copy(
+                ws_kd_raw + int64_t(ws_idx) * (CHUNK * D),
+                reinterpret_cast<uint64_t*>(tma_barrier),
+                shared_storage.input[stage].k_decayed.begin(),
+                int32_t(CHUNK * D * sizeof(BF16)));
+
+            cute::SM90_BULK_COPY_G2S::copy(
+                ws_kr_raw + int64_t(ws_idx) * (CHUNK * D),
+                reinterpret_cast<uint64_t*>(tma_barrier),
+                shared_storage.input[stage].k_restored.begin(),
+                int32_t(CHUNK * D * sizeof(BF16)));
+
+            cute::SM90_BULK_COPY_G2S::copy(
+                ws_gt_raw + int64_t(ws_idx) * D,
+                reinterpret_cast<uint64_t*>(tma_barrier),
+                shared_storage.input[stage].g_total.begin(),
+                int32_t(D * sizeof(float)));
+
+            cute::SM90_BULK_COPY_G2S::copy(
+                ws_inv_raw + int64_t(ws_idx) * (CHUNK * CHUNK),
+                reinterpret_cast<uint64_t*>(tma_barrier),
+                shared_storage.input[stage].INV.begin(),
+                int32_t(CHUNK * CHUNK * sizeof(BF16)));
+	                ++load_write;
         }
+
         load_pipeline.producer_tail(load_write);
     }
-
     // --- MMA warps: state recurrence only
     if (warp_role == WarpRole::MMA) {
         cutlass::arch::NamedBarrier compute_barrier(kComputeThreads, 0);

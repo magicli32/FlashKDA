@@ -540,6 +540,7 @@ void launch_state_only(
         tma_load_v, tma_load_beta,
         tma_load_ws_kd, tma_load_ws_kr,
         tma_load_ws_gt, tma_load_ws_inv,
+	ws_kd, ws_kr, ws_gt, ws_inv,
         tma_store_state,
         T_total, H, N, cu_seqlens_ptr, total_tiles,
         num_warmup_chunks_ptr
@@ -636,6 +637,7 @@ void launch_mt_only(
         tma_load_v, tma_load_beta,
         tma_load_ws_kd, tma_load_ws_kr,
         tma_load_ws_gt, tma_load_ws_inv,
+	ws_kd, ws_kr, ws_gt, ws_inv,
         tma_store_mt,
         T_total, H, N, cu_seqlens_ptr, total_tiles,
         num_warmup_chunks_ptr
