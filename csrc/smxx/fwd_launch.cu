@@ -187,7 +187,7 @@ void launch_fwd(
 #if BLOCK_LEVEL_K1 >= 0 && BLOCK_LEVEL_K2 >= 0
     if constexpr (!IsVarlen) {
         use_k1k2_overlap =
-            (N == 1 && T_total == 8192 && H == 96);
+            (N == 1 && T_total == 8192 && (H == 96 || H == 64));
     }
 
     // Benchmark/debug switch: allow the exact same binary to fall back
