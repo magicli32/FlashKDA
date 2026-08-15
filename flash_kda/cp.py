@@ -311,12 +311,37 @@ def fwd_cp(q, k, v, g, beta, scale, out, A_log, dt_bias, lower_bound,
     )
 
     # --- Step 4: Single forward pass with corrected initial states ---
-    cp_final_state = None
-    if final_state is not None:
-        cp_final_state = torch.empty(cp_N, H, D, D, dtype=torch.float32, device=q.device)
+    use_bf16_resident = os.getenv("FLASHKDA_CP_BF16_RESIDENT", "0") == "1"
+
+    if use_bf16_resident:
+        # Keep CP correction itself in FP32, then quantize only at the boundary
+        # into the final recurrent forward so that the BF16 resident K2
+        # specialization can be selected.
+        cp_h0_fwd = cp_h0.to(torch.bfloat16)
+
+        # The resident specialization currently requires both state input
+        # and state output to exist, so allocate a temporary output even when
+        # the caller does not request final_state.
+        cp_final_state = torch.empty(
+            cp_N, H, D, D,
+            dtype=torch.bfloat16,
+            device=q.device
+        )
+    else:
+        cp_h0_fwd = cp_h0
+
+        cp_final_state = None
+        if final_state is not None:
+            cp_final_state = torch.empty(
+                cp_N, H, D, D,
+                dtype=torch.float32,
+                device=q.device
+            )
 
     fwd(q, k, v, g, beta, scale, out, A_log, dt_bias, lower_bound,
-        initial_state=cp_h0, final_state=cp_final_state, cu_seqlens=cp_cu_seqlens)
+        initial_state=cp_h0_fwd,
+        final_state=cp_final_state,
+        cu_seqlens=cp_cu_seqlens)
 
     # --- Extract final states for original sequences ---
     if final_state is not None:
