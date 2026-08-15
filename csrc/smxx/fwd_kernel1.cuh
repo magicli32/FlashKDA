@@ -114,7 +114,8 @@ template <
     int CHUNK,
     int D,
     int NumThreads,
-    bool IsVarlen = true
+    bool IsVarlen = true,
+    bool WarmupOnly = false
 >
 __global__ void __launch_bounds__(NumThreads, 8) _flash_kda_fwd_prepare(
     CUTE_GRID_CONSTANT TmaLoadQ const tma_load_q,
@@ -137,6 +138,7 @@ __global__ void __launch_bounds__(NumThreads, 8) _flash_kda_fwd_prepare(
     float const* A_log_ptr,
     float gate_scale,
     int const* tile_prefix,
+    int const* num_warmup_chunks_ptr,
     uint32_t* ws_ready,
     K1WorkspaceRawPointers ws_raw
 ) {
@@ -215,6 +217,12 @@ __global__ void __launch_bounds__(NumThreads, 8) _flash_kda_fwd_prepare(
     t_tiles_this_seq = (seq_len + CHUNK - 1) / CHUNK;
     // Early exit for excess CTAs (total_tiles is an upper bound)
     if (local_t >= t_tiles_this_seq) return;
+    // CP: in warmup-only mode, skip tiles outside the warmup suffix.
+    if constexpr (WarmupOnly) {
+        int warmup = num_warmup_chunks_ptr[seq_idx];
+        int t_start = t_tiles_this_seq - min(warmup, t_tiles_this_seq);
+        if (local_t < t_start) return;
+    }
     // --- TMA load inputs (single-shot, no pipeline)
     // Only thread 0 issues TMA loads (not elect_one_sync which is per-warp)
     if (threadIdx.x == 0) {
