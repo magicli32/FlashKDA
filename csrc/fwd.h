@@ -11,6 +11,7 @@ void launch_fwd(
     cutlass::bfloat16_t const* g_bf16_ptr,
     cutlass::bfloat16_t const* beta_ptr,
     void const* initial_state_ptr,
+    void const* correction_state_ptr,
     float scale,
     void* final_state_ptr,
     cutlass::bfloat16_t* out_ptr,

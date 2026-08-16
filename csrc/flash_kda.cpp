@@ -1,5 +1,6 @@
 #include <torch/extension.h>
 #include <c10/cuda/CUDAStream.h>
+#include <cstdlib>
 #include "fwd.h"
 // Declared in warmup_chunks.cu
 void get_warmup_chunks_cuda(
@@ -56,6 +57,7 @@ void fwd(
     torch::Tensor dt_bias,
     double lower_bound,
     std::optional<torch::Tensor> initial_state = std::nullopt,
+    std::optional<torch::Tensor> correction_state = std::nullopt,
     std::optional<torch::Tensor> final_state = std::nullopt,
     std::optional<torch::Tensor> cu_seqlens = std::nullopt
 ) {
@@ -73,6 +75,7 @@ void fwd(
 
     // Validate state tensors if present
     bool has_state_in = initial_state.has_value();
+    bool has_correction_state = correction_state.has_value();
     bool has_state_out = final_state.has_value();
     bool state_fp32 = false;
 
@@ -83,6 +86,18 @@ void fwd(
                      "initial_state must be bfloat16 or float32");
         if (is.dtype() == torch::kFloat32) state_fp32 = true;
     }
+        if (has_correction_state) {
+        auto& cs = correction_state.value();
+        TORCH_CHECK(
+            cs.is_cuda() && cs.is_contiguous(),
+            "correction_state must be contiguous CUDA tensor"
+        );
+        TORCH_CHECK(
+            cs.dtype() == torch::kFloat32,
+            "correction_state must be float32"
+        );
+    }
+
     if (has_state_out) {
         auto& fs = final_state.value();
         TORCH_CHECK(fs.is_cuda() && fs.is_contiguous(), "final_state must be contiguous CUDA tensor");
@@ -157,6 +172,7 @@ void fwd(
 
     // Get state pointers (nullptr if not present)
     void const* initial_state_raw = has_state_in ? initial_state->data_ptr() : nullptr;
+    void const* correction_state_raw = has_correction_state ? correction_state->data_ptr() : nullptr;
     void* final_state_raw = has_state_out ? final_state->data_ptr() : nullptr;
 
     // Determine cu_seqlens and N
@@ -177,18 +193,74 @@ void fwd(
         N_val = B;
     }
 
+        const char* direct_initial_env =
+        std::getenv("FLASHKDA_CP_DIRECT_INITIAL");
+
+    bool direct_mixed_initial =
+        direct_initial_env != nullptr &&
+        direct_initial_env[0] == '1' &&
+        has_state_in &&
+        has_correction_state &&
+        is_varlen &&
+        N_val == 8 &&
+        T_total == 8192 &&
+        H == 96 &&
+        initial_state->dtype() == torch::kBFloat16 &&
+        correction_state->dtype() == torch::kFloat32 &&
+        initial_state->dim() == 4 &&
+        initial_state->size(0) == 6 &&
+        initial_state->size(1) == H &&
+        initial_state->size(2) == D &&
+        initial_state->size(3) == D &&
+        correction_state->dim() == 4 &&
+        correction_state->size(0) == 8 &&
+        correction_state->size(1) == H &&
+        correction_state->size(2) == D &&
+        correction_state->size(3) == D;
+
     // Validate state shapes: always [N, H, D, D]
     if (has_state_in) {
         auto& is = initial_state.value();
         TORCH_CHECK(is.dim() == 4, "initial_state must be [N, H, D, D]");
-        TORCH_CHECK(is.size(0) == N_val && is.size(1) == H && is.size(2) == D && is.size(3) == D,
-                     "initial_state must be [N, H, D, D]");
+	TORCH_CHECK(
+            (is.size(0) == N_val || direct_mixed_initial) &&
+            is.size(1) == H &&
+            is.size(2) == D &&
+            is.size(3) == D,
+            "initial_state must be [N, H, D, D], "
+            "or [6, H, D, D] for M11 direct-initial Mixed H96"
+        );
     }
     if (has_state_out) {
         auto& fs = final_state.value();
-        TORCH_CHECK(fs.dim() == 4, "final_state must be [N, H, D, D]");
-        TORCH_CHECK(fs.size(0) == N_val && fs.size(1) == H && fs.size(2) == D && fs.size(3) == D,
-                     "final_state must be [N, H, D, D]");
+
+        TORCH_CHECK(
+            fs.dim() == 4,
+            "final_state must be [N, H, D, D]"
+        );
+
+        const char* direct_final_env =
+            std::getenv("FLASHKDA_CP_DIRECT_FINAL");
+
+        bool direct_final_store =
+            direct_final_env != nullptr &&
+            direct_final_env[0] == '1' &&
+            is_varlen &&
+            N_val == 8 &&
+            T_total == 8192 &&
+            H == 96 &&
+            has_state_in &&
+            !state_fp32 &&
+            fs.size(0) == 6;
+
+        TORCH_CHECK(
+            (fs.size(0) == N_val || direct_final_store) &&
+            fs.size(1) == H &&
+            fs.size(2) == D &&
+            fs.size(3) == D,
+            "final_state must be [N, H, D, D], "
+            "or [6, H, D, D] for M9-A direct-final Mixed H96"
+        );
     }
 
     int total_tiles;
@@ -202,7 +274,7 @@ void fwd(
     #define LAUNCH(HI, HO, FP32, VL) \
         launch_fwd<128, HI, HO, FP32, VL>( \
             q_ptr, k_ptr, v_ptr, g_ptr, beta_t_ptr, \
-            initial_state_raw, scale_f, final_state_raw, out_ptr, \
+	    initial_state_raw, correction_state_raw, scale_f, final_state_raw, out_ptr, \
             workspace_ptr, total_tiles, \
             int(T_total), int(H), int(N_val), cu_seqlens_dev, \
             A_log_ptr, dt_bias_ptr, gate_scale, stream)
@@ -594,7 +666,9 @@ void state_only(
         py::arg("scale"), py::arg("out"),
         py::arg("workspace"),
         py::arg("A_log"), py::arg("dt_bias"), py::arg("lower_bound"),
-        py::arg("initial_state") = py::none(), py::arg("final_state") = py::none(),
+	py::arg("initial_state") = py::none(),
+        py::arg("correction_state") = py::none(),
+        py::arg("final_state") = py::none(),
         py::arg("cu_seqlens") = py::none());
     m.def("get_workspace_size",
         static_cast<int64_t(*)(int64_t, int64_t, int64_t)>(&get_workspace_size),

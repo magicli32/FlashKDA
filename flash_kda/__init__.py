@@ -2,7 +2,9 @@ import torch
 from flash_kda_C import fwd as _fwd_raw, get_workspace_size, state_only as _state_only_raw
 
 
-def fwd(q, k, v, g, beta, scale, out, A_log, dt_bias, lower_bound, initial_state=None, final_state=None, cu_seqlens=None):
+def fwd(q, k, v, g, beta, scale, out, A_log, dt_bias, lower_bound,
+        initial_state=None, correction_state=None,
+        final_state=None, cu_seqlens=None):
     """FlashKDA forward (Flash Kimi Delta Attention).
 
     Args:
@@ -38,7 +40,10 @@ def fwd(q, k, v, g, beta, scale, out, A_log, dt_bias, lower_bound, initial_state
     workspace = torch.empty(get_workspace_size(T_total, H, N), dtype=torch.uint8, device=q.device)
 
     _fwd_raw(q, k, v, g, beta, float(scale), out, workspace, A_log, dt_bias, lower_bound,
-             initial_state=initial_state, final_state=final_state, cu_seqlens=cu_seqlens)
+             initial_state=initial_state,
+             correction_state=correction_state,
+             final_state=final_state,
+             cu_seqlens=cu_seqlens)
 
 
 def state_only(k, v, g, beta, A_log, dt_bias, lower_bound, cu_seqlens, num_warmup_chunks, calc_mt=False):

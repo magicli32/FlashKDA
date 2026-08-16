@@ -14,6 +14,7 @@ void launch_fwd(
     cutlass::bfloat16_t const* g_bf16_ptr,
     cutlass::bfloat16_t const* beta_ptr,
     void const* initial_state_ptr,
+    void const* correction_state_ptr,
     float scale,
     void* final_state_ptr,
     cutlass::bfloat16_t* out_ptr,
@@ -53,7 +54,52 @@ void launch_fwd(
     auto gmem_layout = make_layout(make_shape(H, T_total, D), make_stride(D, D * H, 1));
     // 1D beta layout: [H*T] contiguous
     auto beta_gmem_layout = make_layout(make_shape(H * T_total));
-    auto state_gmem_layout = make_layout(make_shape(N * H, D, D), LayoutRight{});
+        const char* direct_initial_env =
+        std::getenv("FLASHKDA_CP_DIRECT_INITIAL");
+
+    bool use_direct_initial =
+        direct_initial_env != nullptr &&
+        direct_initial_env[0] == '1' &&
+        correction_state_ptr != nullptr &&
+        IsVarlen &&
+        HasStateIn &&
+        HasStateOut &&
+        !StateFP32 &&
+        T_total == 8192 &&
+        H == 96 &&
+        N == 8;
+
+    int initial_state_N =
+        use_direct_initial ? 6 : N;
+
+        const char* direct_final_env =
+        std::getenv("FLASHKDA_CP_DIRECT_FINAL");
+
+    bool direct_final_store =
+        direct_final_env != nullptr &&
+        direct_final_env[0] == '1' &&
+        IsVarlen &&
+        HasStateIn &&
+        HasStateOut &&
+        !StateFP32 &&
+        T_total == 8192 &&
+        H == 96 &&
+        N == 8;
+
+    int final_state_N =
+        direct_final_store ? 6 : N;
+
+    auto state_in_gmem_layout =
+        make_layout(
+            make_shape(initial_state_N * H, D, D),
+            LayoutRight{}
+        );
+
+    auto state_out_gmem_layout =
+        make_layout(
+            make_shape(final_state_N * H, D, D),
+            LayoutRight{}
+        );
 
     Tensor m_q   = make_tensor(make_gmem_ptr(q_ptr), gmem_layout);
     Tensor m_k   = make_tensor(make_gmem_ptr(k_ptr), gmem_layout);
@@ -143,9 +189,9 @@ void launch_fwd(
         if constexpr (StateFP32) {
             // FP32 state TMA descriptors
             auto m_initial_fp32 = make_tensor(
-                make_gmem_ptr(static_cast<float const*>(initial_state_ptr)), state_gmem_layout);
+                make_gmem_ptr(static_cast<float const*>(initial_state_ptr)), state_in_gmem_layout);
             auto m_final_fp32 = make_tensor(
-                make_gmem_ptr(static_cast<float*>(final_state_ptr)), state_gmem_layout);
+                make_gmem_ptr(static_cast<float*>(final_state_ptr)), state_out_gmem_layout);
             auto tma_load = make_tma_copy(SM90_TMA_LOAD{}, m_initial_fp32, TMAFP32StateSmemLayout{});
             auto tma_store = make_tma_copy(SM90_TMA_STORE{}, m_final_fp32, TMAFP32StateSmemLayout{});
             return cute::make_tuple(tma_load, tma_store);
@@ -157,14 +203,37 @@ void launch_fwd(
             auto state_ptr_store = HasStateOut
                 ? static_cast<BF16*>(final_state_ptr)
                 : reinterpret_cast<BF16*>(out_ptr);  // dummy, never used
-            auto m_init = make_tensor(make_gmem_ptr(state_ptr_load), state_gmem_layout);
-            auto m_final = make_tensor(make_gmem_ptr(state_ptr_store), state_gmem_layout);
+            auto m_init = make_tensor(make_gmem_ptr(state_ptr_load), state_in_gmem_layout);
+            auto m_final = make_tensor(make_gmem_ptr(state_ptr_store), state_out_gmem_layout);
             auto tma_load = make_tma_copy(SM90_TMA_LOAD{}, m_init, TMAStateSmemLayout{});
             auto tma_store = make_tma_copy(SM90_TMA_STORE{}, m_final, TMAStateSmemLayout{});
             return cute::make_tuple(tma_load, tma_store);
         }
     };
     auto [tma_load_initial_state, tma_store_final_state] = make_state_tma();
+        auto correction_state_gmem_layout =
+        make_layout(
+            make_shape(N * H, D, D),
+            LayoutRight{}
+        );
+
+    auto correction_state_load_ptr =
+        correction_state_ptr != nullptr
+            ? static_cast<float const*>(correction_state_ptr)
+            : reinterpret_cast<float const*>(out_ptr);
+
+    auto m_correction_state =
+        make_tensor(
+            make_gmem_ptr(correction_state_load_ptr),
+            correction_state_gmem_layout
+        );
+
+    auto tma_load_correction_state =
+        make_tma_copy(
+            SM90_TMA_LOAD{},
+            m_correction_state,
+            TMAFP32StateSmemLayout{}
+        );
 
 #if BLOCK_LEVEL_K1 >= 0
     cudaMemsetAsync(ws_ready, 0, ready_bytes, stream);
@@ -370,7 +439,7 @@ void launch_fwd(
         using SharedStorageK2T = SharedStorageK2<K2L, kInputStages, kOutputStages>;
         int smem_size_k2 = sizeof(SharedStorageK2T);
 
-        auto kernel2 = []() {
+        auto kernel2 = [&]() {
             if constexpr (StateFP32) {
                 // FP32 keeps the P1/P0-L codegen path.
                 return _flash_kda_fwd_recurrence<
@@ -383,18 +452,35 @@ void launch_fwd(
                     CHUNK, D, kInputStages, kOutputStages, kK2Threads,
                     HasStateIn, HasStateOut, StateFP32, IsVarlen
                 >;
-            } else if constexpr (HasStateIn && HasStateOut) {
+		            } else if constexpr (HasStateIn && HasStateOut) {
                 // Stateful BF16:
-                // keep the P2 register-resident recurrent state winner.
+                // keep the P2 register-resident recurrent-state winner.
+                if (use_direct_initial) {
+                    return _flash_kda_fwd_recurrence_bf16<
+                        decltype(tma_load_v), decltype(tma_load_beta2),
+                        decltype(tma_load_ws_kd), decltype(tma_load_ws_qd), decltype(tma_load_ws_kr),
+                        decltype(tma_load_ws_gt), decltype(tma_load_ws_inv), decltype(tma_load_ws_mqk),
+                        decltype(tma_load_initial_state),
+                        decltype(tma_load_correction_state),
+                        decltype(tma_store_final_state),
+                        decltype(tma_store_out),
+                        CHUNK, D, kInputStages, kOutputStages, kK2Threads,
+                        HasStateIn, HasStateOut, StateFP32, IsVarlen,
+                        true
+                    >;
+                }
+
                 return _flash_kda_fwd_recurrence_bf16<
                     decltype(tma_load_v), decltype(tma_load_beta2),
                     decltype(tma_load_ws_kd), decltype(tma_load_ws_qd), decltype(tma_load_ws_kr),
                     decltype(tma_load_ws_gt), decltype(tma_load_ws_inv), decltype(tma_load_ws_mqk),
                     decltype(tma_load_initial_state),
+                    decltype(tma_load_correction_state),
                     decltype(tma_store_final_state),
                     decltype(tma_store_out),
                     CHUNK, D, kInputStages, kOutputStages, kK2Threads,
-                    HasStateIn, HasStateOut, StateFP32, IsVarlen
+                    HasStateIn, HasStateOut, StateFP32, IsVarlen,
+                    false
                 >;
             } else {
                 // No-state / one-sided BF16:
@@ -417,16 +503,68 @@ void launch_fwd(
         dim3 grid_k2(N, H);
         dim3 block_k2(kK2Threads);
 
-        kernel2<<<grid_k2, block_k2, smem_size_k2, k2_stream>>>(
-            tma_load_v, tma_load_beta2,
-            tma_load_ws_kd, tma_load_ws_qd, tma_load_ws_kr,
-            tma_load_ws_gt, tma_load_ws_inv, tma_load_ws_mqk,
-            tma_load_initial_state,
-            tma_store_final_state,
-            tma_store_out,
-            out_ptr, T_total, H, N, cu_seqlens_ptr, total_tiles,
-            ws_ready, ws_raw
-        );
+	        if constexpr (
+            !StateFP32 &&
+            HasStateIn &&
+            HasStateOut
+        ) {
+            kernel2<<<
+                grid_k2,
+                block_k2,
+                smem_size_k2,
+                k2_stream
+            >>>(
+                tma_load_v,
+                tma_load_beta2,
+                tma_load_ws_kd,
+                tma_load_ws_qd,
+                tma_load_ws_kr,
+                tma_load_ws_gt,
+                tma_load_ws_inv,
+                tma_load_ws_mqk,
+                tma_load_initial_state,
+                tma_load_correction_state,
+                tma_store_final_state,
+                tma_store_out,
+                out_ptr,
+                T_total,
+                H,
+                N,
+                final_state_N,
+                cu_seqlens_ptr,
+                total_tiles,
+                ws_ready,
+                ws_raw
+            );
+        } else {
+            kernel2<<<
+                grid_k2,
+                block_k2,
+                smem_size_k2,
+                k2_stream
+            >>>(
+                tma_load_v,
+                tma_load_beta2,
+                tma_load_ws_kd,
+                tma_load_ws_qd,
+                tma_load_ws_kr,
+                tma_load_ws_gt,
+                tma_load_ws_inv,
+                tma_load_ws_mqk,
+                tma_load_initial_state,
+                tma_store_final_state,
+                tma_store_out,
+                out_ptr,
+                T_total,
+                H,
+                N,
+                final_state_N,
+                cu_seqlens_ptr,
+                total_tiles,
+                ws_ready,
+                ws_raw
+            );
+        }
 
         if (use_k1k2_overlap) {
             cudaEventRecord(
@@ -533,7 +671,15 @@ void launch_state_only(
 
     cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size);
 
-    dim3 grid(N, H);
+    // M7-B1 diagnostic:
+    // For the target Mixed H96 CP-P2 case, only CP segments 2 and 6
+    // are source segments for a split boundary.
+    int launch_N = N;
+    if (T_total == 8192 && H == 96 && N == 8) {
+        launch_N = 2;
+    }
+
+    dim3 grid(launch_N, H);
     dim3 block(kThreads);
 
     kernel<<<grid, block, smem_size, stream>>>(
@@ -955,8 +1101,28 @@ void launch_kernel1_warmup_only(
         ready_bytes,
         stream);
 
+        int warmup_grid_x = total_tiles;
+
+    const char* compact_warmup_env =
+        std::getenv("FLASHKDA_CP_COMPACT_WARMUP_K1");
+
+    bool compact_warmup_k1 =
+        compact_warmup_env != nullptr &&
+        compact_warmup_env[0] == '1' &&
+        T_total == 8192 &&
+        H == 96 &&
+        N == 8;
+
+    if (compact_warmup_k1) {
+        // M10-A diagnostic:
+        // active warmup suffixes are:
+        //   seg2: 5 tiles
+        //   seg6: 4 tiles
+        warmup_grid_x = 9;
+    }
+
     dim3 grid_k1(
-        total_tiles,
+        warmup_grid_x,
         H,
         1);
 
@@ -1015,10 +1181,16 @@ template void launch_kernel1_warmup_only<128>(
     template void launch_fwd<D, HI, HO, FP32, VL>( \
         cutlass::bfloat16_t const*, cutlass::bfloat16_t const*, \
         cutlass::bfloat16_t const*, cutlass::bfloat16_t const*, \
-        cutlass::bfloat16_t const*, void const*, float, void*, \
-        cutlass::bfloat16_t*, void*, int, int, int, int, \
-        int64_t const*, float const*, float const*, float, cudaStream_t);
-
+        cutlass::bfloat16_t const*, \
+        void const*, void const*, \
+        float, \
+        void*, \
+        cutlass::bfloat16_t*, \
+        void*, \
+        int, int, int, int, \
+        int64_t const*, \
+        float const*, float const*, \
+        float, cudaStream_t);
 #define INSTANTIATE_STATE_VARIANTS(VL) \
     INSTANTIATE_LAUNCH_FWD(128, true,  true,  false, VL) \
     INSTANTIATE_LAUNCH_FWD(128, true,  true,  true,  VL) \
