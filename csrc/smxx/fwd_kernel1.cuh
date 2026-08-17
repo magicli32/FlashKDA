@@ -616,11 +616,20 @@ __global__ void __launch_bounds__(NumThreads, 8) _flash_kda_fwd_prepare(
         // wait<0> guarantees its prior bulk async groups are complete.
         tma_store_wait<0>();
 
-        // Publish this workspace tile only after all asynchronous TMA
-        // stores have completed.
-        cuda::atomic_ref<uint32_t, cuda::thread_scope_device>
-            ready_ref(ws_ready[ws_idx]);
+        // U8-B:
+        // Serial K1 -> K2 launches do not need a per-tile
+        // readiness publication. The TMA completion wait above
+        // remains mandatory before this kernel can exit.
+        if (ws_ready != nullptr) {
+            cuda::atomic_ref<
+                uint32_t,
+                cuda::thread_scope_device
+            > ready_ref(ws_ready[ws_idx]);
 
-        ready_ref.store(1u, cuda::memory_order_release);
+            ready_ref.store(
+                1u,
+                cuda::memory_order_release
+            );
+        }
     }
 }

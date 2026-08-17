@@ -367,16 +367,30 @@ __global__ void __maxnreg__(120) _flash_kda_fwd_recurrence_bf16_shared(
 #if BLOCK_LEVEL_K1 >= 0
             // v and beta do not depend on K1. They have already been issued
             // before waiting for the corresponding workspace tile.
-            cuda::atomic_ref<uint32_t, cuda::thread_scope_device>
-                ready_ref(ws_ready[ws_idx]);
+            // U8-A:
+            // A null pointer means K1 and K2 are stream-ordered.
+            // K1 has completed before this kernel starts, so no
+            // per-tile readiness acquire or proxy handoff is required.
+            if (ws_ready != nullptr) {
+                cuda::atomic_ref<
+                    uint32_t,
+                    cuda::thread_scope_device
+                > ready_ref(ws_ready[ws_idx]);
 
-            while (ready_ref.load(cuda::memory_order_acquire) == 0u) {
-                __nanosleep(64);
+                while (
+                    ready_ref.load(
+                        cuda::memory_order_acquire
+                    ) == 0u
+                ) {
+                    __nanosleep(64);
+                }
+
+                // Generic-proxy acquire -> async-proxy TMA reads.
+                asm volatile(
+                    "fence.proxy.async.global;"
+                    ::: "memory"
+                );
             }
-
-            // The readiness flag is observed by the generic proxy while the
-            // following workspace reads are issued through the TMA async proxy.
-            asm volatile("fence.proxy.async.global;" ::: "memory");
 #endif
 
             // P1-B:
@@ -1407,16 +1421,30 @@ __global__ void __launch_bounds__(NumThreads, 1) _flash_kda_fwd_recurrence_bf16(
 #if BLOCK_LEVEL_K1 >= 0
             // v and beta do not depend on K1. They have already been issued
             // before waiting for the corresponding workspace tile.
-            cuda::atomic_ref<uint32_t, cuda::thread_scope_device>
-                ready_ref(ws_ready[ws_idx]);
+            // U8-A:
+            // A null pointer means K1 and K2 are stream-ordered.
+            // K1 has completed before this kernel starts, so no
+            // per-tile readiness acquire or proxy handoff is required.
+            if (ws_ready != nullptr) {
+                cuda::atomic_ref<
+                    uint32_t,
+                    cuda::thread_scope_device
+                > ready_ref(ws_ready[ws_idx]);
 
-            while (ready_ref.load(cuda::memory_order_acquire) == 0u) {
-                __nanosleep(64);
+                while (
+                    ready_ref.load(
+                        cuda::memory_order_acquire
+                    ) == 0u
+                ) {
+                    __nanosleep(64);
+                }
+
+                // Generic-proxy acquire -> async-proxy TMA reads.
+                asm volatile(
+                    "fence.proxy.async.global;"
+                    ::: "memory"
+                );
             }
-
-            // The readiness flag is observed by the generic proxy while the
-            // following workspace reads are issued through the TMA async proxy.
-            asm volatile("fence.proxy.async.global;" ::: "memory");
 #endif
 
             // P1-B:
@@ -2420,16 +2448,30 @@ __global__ void __launch_bounds__(NumThreads, 1) _flash_kda_fwd_recurrence(
 #if BLOCK_LEVEL_K1 >= 0
             // v and beta do not depend on K1. They have already been issued
             // before waiting for the corresponding workspace tile.
-            cuda::atomic_ref<uint32_t, cuda::thread_scope_device>
-                ready_ref(ws_ready[ws_idx]);
+            // U8-A:
+            // A null pointer means K1 and K2 are stream-ordered.
+            // K1 has completed before this kernel starts, so no
+            // per-tile readiness acquire or proxy handoff is required.
+            if (ws_ready != nullptr) {
+                cuda::atomic_ref<
+                    uint32_t,
+                    cuda::thread_scope_device
+                > ready_ref(ws_ready[ws_idx]);
 
-            while (ready_ref.load(cuda::memory_order_acquire) == 0u) {
-                __nanosleep(64);
+                while (
+                    ready_ref.load(
+                        cuda::memory_order_acquire
+                    ) == 0u
+                ) {
+                    __nanosleep(64);
+                }
+
+                // Generic-proxy acquire -> async-proxy TMA reads.
+                asm volatile(
+                    "fence.proxy.async.global;"
+                    ::: "memory"
+                );
             }
-
-            // The readiness flag is observed by the generic proxy while the
-            // following workspace reads are issued through the TMA async proxy.
-            asm volatile("fence.proxy.async.global;" ::: "memory");
 #endif
 
             // P1-B:

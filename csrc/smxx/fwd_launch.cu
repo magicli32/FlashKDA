@@ -235,10 +235,6 @@ void launch_fwd(
             TMAFP32StateSmemLayout{}
         );
 
-#if BLOCK_LEVEL_K1 >= 0
-    cudaMemsetAsync(ws_ready, 0, ready_bytes, stream);
-#endif
-
     // ============================================================
     // P0-B: experimental K1 producer / K2 consumer overlap.
     //
@@ -254,6 +250,31 @@ void launch_fwd(
     cudaEvent_t producer_done_event = nullptr;
     cudaEvent_t consumer_done_event = nullptr;
 
+    // U8-B:
+    // A null pointer disables the complete per-tile readiness
+    // protocol for the exact stream-ordered Uniform H96 path.
+    bool skip_uniform_h96_ready_protocol = false;
+
+    if constexpr (IsVarlen) {
+        const char* skip_ready_env =
+            std::getenv(
+                "FLASH_KDA_UNIFORM_H96_SKIP_READY_WAIT"
+            );
+
+        skip_uniform_h96_ready_protocol =
+            skip_ready_env != nullptr &&
+            std::atoi(skip_ready_env) != 0 &&
+            N == 8 &&
+            T_total == 8192 &&
+            H == 96 &&
+            D == 128;
+    }
+
+    uint32_t* ready_protocol_ptr =
+        skip_uniform_h96_ready_protocol
+            ? nullptr
+            : ws_ready;
+
 #if BLOCK_LEVEL_K1 >= 0 && BLOCK_LEVEL_K2 >= 0
     if constexpr (!IsVarlen) {
         use_k1k2_overlap =
@@ -267,6 +288,22 @@ void launch_fwd(
             use_k1k2_overlap = false;
         }
     }
+
+    if (use_k1k2_overlap) {
+        skip_uniform_h96_ready_protocol = false;
+        ready_protocol_ptr = ws_ready;
+    }
+
+#if BLOCK_LEVEL_K1 >= 0
+    if (ready_protocol_ptr != nullptr) {
+        cudaMemsetAsync(
+            ready_protocol_ptr,
+            0,
+            ready_bytes,
+            stream
+        );
+    }
+#endif
 
     if (use_k1k2_overlap) {
         // Cached per-host-thread objects: avoid stream/event creation
@@ -356,6 +393,17 @@ void launch_fwd(
 
         producer_done_event = producer_done_event_tls;
         consumer_done_event = consumer_done_event_tls;
+    }
+#endif
+
+#if BLOCK_LEVEL_K1 >= 0 && BLOCK_LEVEL_K2 < 0
+    if (ready_protocol_ptr != nullptr) {
+        cudaMemsetAsync(
+            ready_protocol_ptr,
+            0,
+            ready_bytes,
+            stream
+        );
     }
 #endif
 
@@ -459,7 +507,7 @@ void launch_fwd(
             tma_store_ws_kd, tma_store_ws_qd, tma_store_ws_kr,
             tma_store_ws_gt, tma_store_ws_inv, tma_store_ws_mqk,
             scale, T_total, H, N, cu_seqlens_ptr, total_tiles,
-            A_log_ptr, gate_scale, ws_tile_prefix, nullptr, ws_ready, ws_raw
+            A_log_ptr, gate_scale, ws_tile_prefix, nullptr, ready_protocol_ptr, ws_raw
         );
 
         if (use_k1k2_overlap) {
@@ -572,7 +620,7 @@ void launch_fwd(
                 final_state_N,
                 cu_seqlens_ptr,
                 total_tiles,
-                ws_ready,
+                ready_protocol_ptr,
                 ws_raw
             );
         } else {
@@ -600,7 +648,7 @@ void launch_fwd(
                 final_state_N,
                 cu_seqlens_ptr,
                 total_tiles,
-                ws_ready,
+                ready_protocol_ptr,
                 ws_raw
             );
         }
