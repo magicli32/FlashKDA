@@ -388,6 +388,21 @@ void launch_fwd(
             smem_size_k1_launch = k1_reserved_smem;
         }
 
+        bool use_uniform_h96_k1_fast = false;
+
+        if constexpr (IsVarlen) {
+            const char* fast_env =
+                std::getenv("FLASH_KDA_UNIFORM_H96_K1_FAST");
+
+            use_uniform_h96_k1_fast =
+                fast_env != nullptr &&
+                std::atoi(fast_env) != 0 &&
+                N == 8 &&
+                T_total == 8192 &&
+                H == 96 &&
+                D == 128;
+        }
+
         auto kernel1 = _flash_kda_fwd_prepare<
             decltype(tma_load_q), decltype(tma_load_k),
             decltype(tma_load_beta),
@@ -397,6 +412,19 @@ void launch_fwd(
             CHUNK, D, kK1Threads, IsVarlen
         >;
 
+        if constexpr (IsVarlen) {
+            if (use_uniform_h96_k1_fast) {
+                kernel1 = _flash_kda_fwd_prepare<
+                    decltype(tma_load_q), decltype(tma_load_k),
+                    decltype(tma_load_beta),
+                    decltype(tma_load_g), decltype(tma_load_dt_bias),
+                    decltype(tma_store_ws_kd), decltype(tma_store_ws_qd), decltype(tma_store_ws_kr),
+                    decltype(tma_store_ws_gt), decltype(tma_store_ws_inv), decltype(tma_store_ws_mqk),
+                    CHUNK, D, kK1Threads, true, false, true
+                >;
+            }
+        }
+
         cudaFuncSetAttribute(
             kernel1,
             cudaFuncAttributeMaxDynamicSharedMemorySize,
@@ -404,13 +432,24 @@ void launch_fwd(
         );
 
         if constexpr (IsVarlen) {
-            _flash_kda_build_tile_prefix<<<1, 32, 0, stream>>>(
-                cu_seqlens_ptr, N, CHUNK, ws_tile_prefix);
+            if (!use_uniform_h96_k1_fast) {
+                _flash_kda_build_tile_prefix<<<1, 32, 0, stream>>>(
+                    cu_seqlens_ptr, N, CHUNK, ws_tile_prefix);
+            }
+        }
+
+        int k1_tiles = total_tiles;
+
+        if (use_uniform_h96_k1_fast) {
+            int T_seq = T_total / N;
+            int tiles_per_seq =
+                (T_seq + CHUNK - 1) / CHUNK;
+            k1_tiles = N * tiles_per_seq;
         }
 
         dim3 grid_k1 = use_k1k2_overlap
-            ? dim3(total_tiles * H, 1, 1)
-            : dim3(total_tiles, H, 1);
+            ? dim3(k1_tiles * H, 1, 1)
+            : dim3(k1_tiles, H, 1);
 
         dim3 block_k1(kK1Threads);
 

@@ -115,7 +115,8 @@ template <
     int D,
     int NumThreads,
     bool IsVarlen = true,
-    bool WarmupOnly = false
+    bool WarmupOnly = false,
+    bool UniformVarlenFast = false
 >
 __global__ void __launch_bounds__(NumThreads, 8) _flash_kda_fwd_prepare(
     CUTE_GRID_CONSTANT TmaLoadQ const tma_load_q,
@@ -192,7 +193,7 @@ __global__ void __launch_bounds__(NumThreads, 8) _flash_kda_fwd_prepare(
     int64_t bos, eos;
     int seq_len, t_tiles_this_seq;
 
-    if constexpr (IsVarlen) {
+    if constexpr (IsVarlen && !UniformVarlenFast) {
         int lo = 0, hi = N;
         while (lo + 1 < hi) {
             int mid = (lo + hi) >> 1;
@@ -205,6 +206,8 @@ __global__ void __launch_bounds__(NumThreads, 8) _flash_kda_fwd_prepare(
         bos = cu_seqlens[seq_idx];
         eos = cu_seqlens[seq_idx + 1];
     } else {
+        // Fixed-length and UniformVarlenFast use the same direct mapping.
+        // UniformVarlenFast is enabled only by the exact-shape diagnostic.
         int T_seq = T_total / N;
         int tiles_per_seq = (T_seq + CHUNK - 1) / CHUNK;
         seq_idx = global_tile_idx / tiles_per_seq;
