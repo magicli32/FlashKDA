@@ -266,7 +266,7 @@ void launch_fwd(
             std::atoi(skip_ready_env) != 0 &&
             N == 8 &&
             T_total == 8192 &&
-            H == 96 &&
+            (H == 96 || H == 64) &&
             D == 128;
     }
 
@@ -447,7 +447,7 @@ void launch_fwd(
                 std::atoi(fast_env) != 0 &&
                 N == 8 &&
                 T_total == 8192 &&
-                H == 96 &&
+                (H == 96 || H == 64) &&
                 D == 128;
         }
 
