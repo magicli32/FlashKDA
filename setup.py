@@ -4,7 +4,22 @@ from setuptools import setup
 from torch.utils.cpp_extension import CUDAExtension, BuildExtension, CUDA_HOME
 
 this_dir = os.path.dirname(os.path.abspath(__file__))
-subprocess.run(["git", "submodule", "update", "--init", "cutlass"])
+
+cutlass_header = os.path.join(
+    this_dir,
+    "cutlass",
+    "include",
+    "cutlass",
+    "cutlass.h",
+)
+
+if not os.path.exists(cutlass_header):
+    subprocess.run(
+        ["git", "submodule", "update", "--init", "cutlass"],
+        check=True,
+    )
+else:
+    print(f"Using existing CUTLASS source: {cutlass_header}")
 
 
 def is_flag_set(flag: str) -> bool:
