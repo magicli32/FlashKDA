@@ -9,3 +9,4 @@ build/**
 .clangd
 plot*.png
 uniform_h96_u5a_u3_fp32_reference.pt
+*.sqlite
