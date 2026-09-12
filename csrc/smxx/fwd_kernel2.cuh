@@ -1313,6 +1313,11 @@ __global__ void __launch_bounds__(NumThreads, 1) _flash_kda_fwd_recurrence_bf16(
 
             auto tCrB = thr_mma.partition_fragment_B(B_ref);
 
+            // P3-D1: second independent MMA-B fragment.
+            // Keep both resident-state blocks live so independent
+            // K/Q prefetch can sit between MOVM and HMMA.
+            auto tCrB1 = thr_mma.partition_fragment_B(B_ref);
+
             auto tCrC_ref = thr_mma.partition_C(C_ref);
 
             using AccFragT = decltype(thr_mma.make_fragment_C(tCrC_ref));
@@ -1359,55 +1364,64 @@ __global__ void __launch_bounds__(NumThreads, 1) _flash_kda_fwd_recurrence_bf16(
 
             #pragma unroll
             for (int k = 0; k < K_BLOCKS; ++k) {
+                // Current K/Q have already been loaded into tCrAi_*.
+                // Materialize them before next-iteration prefetch
+                // overwrites the staging fragments.
                 cute::transform(
                     tCrAi_k, tCrA_k, cute::identity{});
                 cute::transform(
                     tCrAi_q, tCrA_q, cute::identity{});
 
-                // resident_state[0][k]:
-                // C-fragment layout -> B-fragment layout.
-                uint32_t* state_c =
+                // ====================================================
+                // P3-D1:
+                //
+                //     MOVM state0 -> B0
+                //     MOVM state1 -> B1
+                //     prefetch K/Q(k+1)
+                //     HMMA B0
+                //     HMMA B1
+                //
+                // We do NOT remove MOVM.
+                // We only increase producer -> consumer distance.
+                // ====================================================
+
+                uint32_t* state_c0 =
                     reinterpret_cast<uint32_t*>(
                         &resident_state[0][k](0));
-                uint32_t* state_b =
+
+                uint32_t* state_b0 =
                     reinterpret_cast<uint32_t*>(
                         &tCrB(0));
 
                 SM75_U32x1_MOVM_T::copy(
-                    state_c[0], state_b[0]);
+                    state_c0[0], state_b0[0]);
                 SM75_U32x1_MOVM_T::copy(
-                    state_c[1], state_b[1]);
+                    state_c0[1], state_b0[1]);
                 SM75_U32x1_MOVM_T::copy(
-                    state_c[2], state_b[2]);
+                    state_c0[2], state_b0[2]);
                 SM75_U32x1_MOVM_T::copy(
-                    state_c[3], state_b[3]);
+                    state_c0[3], state_b0[3]);
 
-                gemm(
-                    thr_mma,
-                    tCrA_k(_,_,Int<0>{}),
-                    tCrB(_,_,Int<0>{}),
-                    u_acc[0]);
-
-                gemm(
-                    thr_mma,
-                    tCrA_q(_,_,Int<0>{}),
-                    tCrB(_,_,Int<0>{}),
-                    out_acc[0]);
-
-                // resident_state[1][k]
-                state_c =
+                uint32_t* state_c1 =
                     reinterpret_cast<uint32_t*>(
                         &resident_state[1][k](0));
 
-                SM75_U32x1_MOVM_T::copy(
-                    state_c[0], state_b[0]);
-                SM75_U32x1_MOVM_T::copy(
-                    state_c[1], state_b[1]);
-                SM75_U32x1_MOVM_T::copy(
-                    state_c[2], state_b[2]);
-                SM75_U32x1_MOVM_T::copy(
-                    state_c[3], state_b[3]);
+                uint32_t* state_b1 =
+                    reinterpret_cast<uint32_t*>(
+                        &tCrB1(0));
 
+                SM75_U32x1_MOVM_T::copy(
+                    state_c1[0], state_b1[0]);
+                SM75_U32x1_MOVM_T::copy(
+                    state_c1[1], state_b1[1]);
+                SM75_U32x1_MOVM_T::copy(
+                    state_c1[2], state_b1[2]);
+                SM75_U32x1_MOVM_T::copy(
+                    state_c1[3], state_b1[3]);
+
+                // Independent work inserted between MOVM and HMMA.
+                // Current A operands are already in tCrA_k/tCrA_q,
+                // so these loads prepare only iteration k+1.
                 if (k + 1 < K_BLOCKS) {
                     copy(
                         smem_tiled_copy_A,
@@ -1432,16 +1446,30 @@ __global__ void __launch_bounds__(NumThreads, 1) _flash_kda_fwd_recurrence_bf16(
                         tCrAi_q_view);
                 }
 
+                // Same mathematical accumulation order as P2-S:
+                // for every accumulator, k still advances 0,1,2,...
                 gemm(
                     thr_mma,
                     tCrA_k(_,_,Int<0>{}),
                     tCrB(_,_,Int<0>{}),
-                    u_acc[1]);
+                    u_acc[0]);
 
                 gemm(
                     thr_mma,
                     tCrA_q(_,_,Int<0>{}),
                     tCrB(_,_,Int<0>{}),
+                    out_acc[0]);
+
+                gemm(
+                    thr_mma,
+                    tCrA_k(_,_,Int<0>{}),
+                    tCrB1(_,_,Int<0>{}),
+                    u_acc[1]);
+
+                gemm(
+                    thr_mma,
+                    tCrA_q(_,_,Int<0>{}),
+                    tCrB1(_,_,Int<0>{}),
                     out_acc[1]);
             }
 
