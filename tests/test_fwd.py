@@ -262,6 +262,124 @@ def test_fwd():
     print("Success: kernel == torch ref (exact match)")
 
 
+def test_v_split_matches_baseline():
+    """V_SPLIT=2 must preserve every K2 state mode and the tail path."""
+    D = 128
+    scale = 1.0 / math.sqrt(D)
+    lower_bound = -5.0
+
+    for seq_lens in ([33], [17, 16]):
+        torch.manual_seed(2026)
+        total_t = sum(seq_lens)
+        n_seq = len(seq_lens)
+        h = 2
+        shape = (1, total_t, h, D)
+        q = F.normalize(torch.randn(shape, device="cuda"), p=2, dim=-1).to(torch.bfloat16)
+        k = F.normalize(torch.randn(shape, device="cuda"), p=2, dim=-1).to(torch.bfloat16)
+        v = torch.randn(shape, dtype=torch.bfloat16, device="cuda")
+        g = torch.randn(shape, dtype=torch.bfloat16, device="cuda")
+        beta = torch.randn((1, total_t, h), dtype=torch.bfloat16, device="cuda")
+        A_log = torch.rand(h, dtype=torch.float32, device="cuda")
+        dt_bias = torch.rand(h, D, dtype=torch.float32, device="cuda")
+        cu_seqlens = None
+        if n_seq > 1:
+            cu_seqlens = torch.tensor([0, *torch.tensor(seq_lens).cumsum(0).tolist()],
+                                       dtype=torch.long, device="cuda")
+
+        for state_dtype in (torch.bfloat16, torch.float32, None):
+            initial_state = None
+            if state_dtype is not None:
+                initial_state = torch.randn((n_seq, h, D, D), dtype=state_dtype,
+                                            device="cuda")
+
+            for write_final_state in (False, True):
+                # A state-out-only path is also exercised when state_dtype is None.
+                final_dtype = state_dtype or torch.bfloat16
+                final1 = (torch.empty((n_seq, h, D, D), dtype=final_dtype,
+                                      device="cuda") if write_final_state else None)
+                final2 = torch.empty_like(final1) if final1 is not None else None
+                out1 = torch.empty_like(q)
+                out2 = torch.empty_like(q)
+                common = dict(A_log=A_log, dt_bias=dt_bias,
+                              lower_bound=lower_bound,
+                              initial_state=initial_state,
+                              cu_seqlens=cu_seqlens)
+
+                flash_kda.fwd(q, k, v, g, beta, scale, out1,
+                              final_state=final1, v_split=1, **common)
+                flash_kda.fwd(q, k, v, g, beta, scale, out2,
+                              final_state=final2, v_split=2, **common)
+                torch.cuda.synchronize()
+
+                tag = (f"seq_lens={seq_lens}, state_dtype={state_dtype}, "
+                       f"write_final_state={write_final_state}")
+                assert torch.equal(out2, out1), f"V-split output mismatch: {tag}"
+                if final1 is not None:
+                    assert torch.equal(final2, final1), f"V-split state mismatch: {tag}"
+
+
+def test_tcgen05_phase1_matches_baseline():
+    """TCGen05 Phase 1 must preserve all state modes and varlen tails."""
+    D = 128
+    scale = 1.0 / math.sqrt(D)
+    lower_bound = -5.0
+
+    for seq_lens in ([33], [17, 16]):
+        torch.manual_seed(2026)
+        total_t = sum(seq_lens)
+        n_seq = len(seq_lens)
+        h = 2
+        shape = (1, total_t, h, D)
+        q = F.normalize(torch.randn(shape, device="cuda"), p=2, dim=-1).to(torch.bfloat16)
+        k = F.normalize(torch.randn(shape, device="cuda"), p=2, dim=-1).to(torch.bfloat16)
+        v = torch.randn(shape, dtype=torch.bfloat16, device="cuda")
+        g = torch.randn(shape, dtype=torch.bfloat16, device="cuda")
+        beta = torch.randn((1, total_t, h), dtype=torch.bfloat16, device="cuda")
+        A_log = torch.rand(h, dtype=torch.float32, device="cuda")
+        dt_bias = torch.rand(h, D, dtype=torch.float32, device="cuda")
+        cu_seqlens = None
+        if n_seq > 1:
+            cu_seqlens = torch.tensor(
+                [0, *torch.tensor(seq_lens).cumsum(0).tolist()],
+                dtype=torch.long, device="cuda")
+
+        for state_dtype in (torch.bfloat16, torch.float32, None):
+            initial_state = None
+            if state_dtype is not None:
+                initial_state = torch.randn(
+                    (n_seq, h, D, D), dtype=state_dtype, device="cuda")
+
+            for write_final_state in (False, True):
+                final_dtype = state_dtype or torch.bfloat16
+                final_base = (torch.empty(
+                    (n_seq, h, D, D), dtype=final_dtype, device="cuda")
+                    if write_final_state else None)
+                final_tc = (torch.empty_like(final_base)
+                            if final_base is not None else None)
+                out_base = torch.empty_like(q)
+                out_tc = torch.empty_like(q)
+                common = dict(
+                    A_log=A_log, dt_bias=dt_bias, lower_bound=lower_bound,
+                    initial_state=initial_state, cu_seqlens=cu_seqlens,
+                    v_split=1)
+
+                flash_kda.fwd(
+                    q, k, v, g, beta, scale, out_base,
+                    final_state=final_base, tcgen05_k2=False, **common)
+                flash_kda.fwd(
+                    q, k, v, g, beta, scale, out_tc,
+                    final_state=final_tc, tcgen05_k2=True, **common)
+                torch.cuda.synchronize()
+
+                tag = (f"seq_lens={seq_lens}, state_dtype={state_dtype}, "
+                       f"write_final_state={write_final_state}")
+                assert torch.equal(out_tc, out_base), (
+                    f"TCGen05 output mismatch: {tag}")
+                if final_base is not None:
+                    assert torch.equal(final_tc, final_base), (
+                        f"TCGen05 state mismatch: {tag}")
+
+
 def test_fwd_varlen():
     """Test: varlen cutlass kernel vs torch ref, require exact match."""
     H, D = 96, 128

@@ -2,7 +2,9 @@ import torch
 from flash_kda_C import fwd as _fwd_raw, get_workspace_size
 
 
-def fwd(q, k, v, g, beta, scale, out, A_log, dt_bias, lower_bound, initial_state=None, final_state=None, cu_seqlens=None):
+def fwd(q, k, v, g, beta, scale, out, A_log, dt_bias, lower_bound,
+        initial_state=None, final_state=None, cu_seqlens=None, v_split=1,
+        tcgen05_k2=False):
     """FlashKDA forward (Flash Kimi Delta Attention).
 
     Args:
@@ -25,6 +27,13 @@ def fwd(q, k, v, g, beta, scale, out, A_log, dt_bias, lower_bound, initial_state
             recurrent state. Same dtype/shape rules as ``initial_state``.
         cu_seqlens (torch.Tensor, optional): Cumulative sequence lengths, int64,
             shape ``[N+1]``. When provided, ``B`` must be 1.
+        v_split (int): Number of independent K2 CTAs per head along V.
+            ``1`` is the baseline. ``2`` assigns 64 of the 128 V rows to
+            each CTA; the CTAs write disjoint output/state slices and require
+            no cross-CTA state correction.
+        tcgen05_k2 (bool): Use the B300-native TCGen05/TMEM implementation
+            for K2 Phase 1 (the two full-K ``k @ state`` and ``q @ state``
+            products). Currently requires ``v_split=1``.
 
     Notes:
         * Currently requires ``K = V = 128``.
@@ -37,5 +46,7 @@ def fwd(q, k, v, g, beta, scale, out, A_log, dt_bias, lower_bound, initial_state
 
     workspace = torch.empty(get_workspace_size(T_total, H, N), dtype=torch.uint8, device=q.device)
 
-    _fwd_raw(q, k, v, g, beta, float(scale), out, workspace, A_log, dt_bias, lower_bound,
-             initial_state=initial_state, final_state=final_state, cu_seqlens=cu_seqlens)
+    _fwd_raw(q, k, v, g, beta, float(scale), out, workspace, A_log, dt_bias,
+             lower_bound, initial_state=initial_state, final_state=final_state,
+             cu_seqlens=cu_seqlens, v_split=v_split,
+             tcgen05_k2=tcgen05_k2)

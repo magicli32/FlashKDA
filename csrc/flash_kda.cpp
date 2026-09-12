@@ -39,7 +39,9 @@ void fwd(
     double lower_bound,
     std::optional<torch::Tensor> initial_state = std::nullopt,
     std::optional<torch::Tensor> final_state = std::nullopt,
-    std::optional<torch::Tensor> cu_seqlens = std::nullopt
+    std::optional<torch::Tensor> cu_seqlens = std::nullopt,
+    int64_t v_split = 1,
+    bool tcgen05_k2 = false
 ) {
     TORCH_CHECK(q.is_cuda() && k.is_cuda() && v.is_cuda() && g.is_cuda() && beta.is_cuda() && out.is_cuda() && workspace.is_cuda(),
                 "all tensors must be on CUDA");
@@ -108,6 +110,10 @@ void fwd(
     TORCH_CHECK(dt_bias.dim() == 2 && dt_bias.size(0) == H && dt_bias.size(1) == D, "dt_bias must be [H, D]");
 
     TORCH_CHECK(D == 128, "currently only supports D == 128");
+    TORCH_CHECK(v_split == 1 || v_split == 2,
+                "v_split must be 1 or 2");
+    TORCH_CHECK(!tcgen05_k2 || v_split == 1,
+                "tcgen05_k2 currently requires v_split == 1");
 
     // Flatten [B, T, H, D] -> [B*T, H, D] (contiguous, same data pointer)
     auto q_3d = q.reshape({T_total, H, D});
@@ -181,35 +187,43 @@ void fwd(
     }
 
     // Dispatch based on state configuration and varlen
-    #define LAUNCH(HI, HO, FP32, VL) \
-        launch_fwd<128, HI, HO, FP32, VL>( \
+    #define LAUNCH(HI, HO, FP32, VL, VS, TC) \
+        launch_fwd<128, HI, HO, FP32, VL, VS, TC>( \
             q_ptr, k_ptr, v_ptr, g_ptr, beta_t_ptr, \
             initial_state_raw, scale_f, final_state_raw, out_ptr, \
             workspace_ptr, total_tiles, \
             int(T_total), int(H), int(N_val), cu_seqlens_dev, \
             A_log_ptr, dt_bias_ptr, gate_scale, stream)
 
-    #define DISPATCH_STATE(VL) \
+    #define DISPATCH_STATE(VL, VS, TC) \
         if (!has_state_in && !has_state_out) { \
-            LAUNCH(false, false, false, VL); \
+            LAUNCH(false, false, false, VL, VS, TC); \
         } else if (has_state_in && has_state_out && state_fp32) { \
-            LAUNCH(true, true, true, VL); \
+            LAUNCH(true, true, true, VL, VS, TC); \
         } else if (has_state_in && has_state_out && !state_fp32) { \
-            LAUNCH(true, true, false, VL); \
+            LAUNCH(true, true, false, VL, VS, TC); \
         } else if (!has_state_in && has_state_out && state_fp32) { \
-            LAUNCH(false, true, true, VL); \
+            LAUNCH(false, true, true, VL, VS, TC); \
         } else if (!has_state_in && has_state_out && !state_fp32) { \
-            LAUNCH(false, true, false, VL); \
+            LAUNCH(false, true, false, VL, VS, TC); \
         } else if (has_state_in && !has_state_out && state_fp32) { \
-            LAUNCH(true, false, true, VL); \
+            LAUNCH(true, false, true, VL, VS, TC); \
         } else { \
-            LAUNCH(true, false, false, VL); \
+            LAUNCH(true, false, false, VL, VS, TC); \
         }
 
-    if (is_varlen) {
-        DISPATCH_STATE(true);
+    if (tcgen05_k2 && is_varlen) {
+        DISPATCH_STATE(true, 1, true);
+    } else if (tcgen05_k2) {
+        DISPATCH_STATE(false, 1, true);
+    } else if (is_varlen && v_split == 1) {
+        DISPATCH_STATE(true, 1, false);
+    } else if (is_varlen) {
+        DISPATCH_STATE(true, 2, false);
+    } else if (v_split == 1) {
+        DISPATCH_STATE(false, 1, false);
     } else {
-        DISPATCH_STATE(false);
+        DISPATCH_STATE(false, 2, false);
     }
 
     #undef DISPATCH_STATE
@@ -223,7 +237,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         py::arg("workspace"),
         py::arg("A_log"), py::arg("dt_bias"), py::arg("lower_bound"),
         py::arg("initial_state") = py::none(), py::arg("final_state") = py::none(),
-        py::arg("cu_seqlens") = py::none());
+        py::arg("cu_seqlens") = py::none(), py::arg("v_split") = 1,
+        py::arg("tcgen05_k2") = false);
     m.def("get_workspace_size",
         static_cast<int64_t(*)(int64_t, int64_t, int64_t)>(&get_workspace_size),
         "Get workspace size in bytes",

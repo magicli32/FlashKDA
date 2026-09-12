@@ -30,7 +30,7 @@ def bench_fn(fn, warmup, iters, repeats):
     return mean, mn, mx
 
 
-def run_case(seq_lens, H, D, warmup, iters, repeats):
+def run_case(seq_lens, H, D, warmup, iters, repeats, v_split):
     device = torch.device("cuda")
     LOWER_BOUND = -5.0
     scale_float = 1.0 / math.sqrt(D)
@@ -44,10 +44,12 @@ def run_case(seq_lens, H, D, warmup, iters, repeats):
             [0] + list(torch.cumsum(torch.tensor(seq_lens), dim=0).tolist()),
             dtype=torch.long, device=device,
         )
-        print(f"varlen shape=[{T_total},{H},{D}] seq_lens={seq_lens} warmup={warmup} iters={iters} repeats={repeats}")
+        print(f"varlen shape=[{T_total},{H},{D}] seq_lens={seq_lens} "
+              f"v_split={v_split} warmup={warmup} iters={iters} repeats={repeats}")
         extra = {"cu_seqlens": cu_seqlens}
     else:
-        print(f"shape=[{T_total},{H},{D}] warmup={warmup} iters={iters} repeats={repeats}")
+        print(f"shape=[{T_total},{H},{D}] v_split={v_split} "
+              f"warmup={warmup} iters={iters} repeats={repeats}")
         extra = {}
 
     q = F.normalize(torch.randn((1, T_total, H, D), dtype=torch.float32, device=device), p=2, dim=-1).to(torch.bfloat16)
@@ -67,7 +69,8 @@ def run_case(seq_lens, H, D, warmup, iters, repeats):
     def run_flash_kda():
         flash_kda.fwd(q, k, v, g, beta, scale, out,
                       A_log=A_log, dt_bias=dt_bias, lower_bound=LOWER_BOUND,
-                      initial_state=initial_state, final_state=final_state, **extra)
+                      initial_state=initial_state, final_state=final_state,
+                      v_split=v_split, **extra)
 
     mean, mn, mx = bench_fn(run_flash_kda, warmup, iters, repeats)
     print(f"  flash_kda (bf16 state) : mean={mean:.4f} ms, min={mn:.4f} ms, max={mx:.4f} ms")
@@ -75,7 +78,8 @@ def run_case(seq_lens, H, D, warmup, iters, repeats):
     # --- flash_kda: no state ---
     def run_flash_kda_no_state():
         flash_kda.fwd(q, k, v, g, beta, scale, out,
-                      A_log=A_log, dt_bias=dt_bias, lower_bound=LOWER_BOUND, **extra)
+                      A_log=A_log, dt_bias=dt_bias, lower_bound=LOWER_BOUND,
+                      v_split=v_split, **extra)
 
     mean, mn, mx = bench_fn(run_flash_kda_no_state, warmup, iters, repeats)
     print(f"  flash_kda (no state)   : mean={mean:.4f} ms, min={mn:.4f} ms, max={mx:.4f} ms")
@@ -87,7 +91,8 @@ def run_case(seq_lens, H, D, warmup, iters, repeats):
     def run_flash_kda_fp32():
         flash_kda.fwd(q, k, v, g, beta, scale, out,
                       A_log=A_log, dt_bias=dt_bias, lower_bound=LOWER_BOUND,
-                      initial_state=initial_state_fp32, final_state=final_state_fp32, **extra)
+                      initial_state=initial_state_fp32, final_state=final_state_fp32,
+                      v_split=v_split, **extra)
 
     mean, mn, mx = bench_fn(run_flash_kda_fp32, warmup, iters, repeats)
     print(f"  flash_kda (fp32 state) : mean={mean:.4f} ms, min={mn:.4f} ms, max={mx:.4f} ms")
@@ -151,6 +156,7 @@ def main():
     p.add_argument("--mode", choices=["fixed", "varlen", "all"], default="all")
     p.add_argument("--H", type=int, default=96)
     p.add_argument("--D", type=int, default=128)
+    p.add_argument("--v-split", type=int, choices=[1, 2], default=1)
     args = p.parse_args()
 
     cases = []
@@ -160,7 +166,8 @@ def main():
         cases.extend(VARLEN_CASES)
 
     for seq_lens in cases:
-        run_case(seq_lens, args.H, args.D, args.warmup, args.iters, args.repeats)
+        run_case(seq_lens, args.H, args.D, args.warmup, args.iters,
+                 args.repeats, args.v_split)
 
 
 if __name__ == "__main__":

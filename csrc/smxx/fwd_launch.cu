@@ -3,7 +3,8 @@
 #include "fwd_kernel2.cuh"
 
 // ==================== launch_fwd ====================
-template <int D, bool HasStateIn, bool HasStateOut, bool StateFP32, bool IsVarlen>
+template <int D, bool HasStateIn, bool HasStateOut, bool StateFP32,
+          bool IsVarlen, int VSplit, bool UseTcgen05>
 void launch_fwd(
     cutlass::bfloat16_t const* q_ptr,
     cutlass::bfloat16_t const* k_ptr,
@@ -29,20 +30,27 @@ void launch_fwd(
     constexpr int kInputStages = 3;
     constexpr int kOutputStages = 2;
     constexpr int CHUNK = 16;
+    static_assert(VSplit == 1 || VSplit == 2,
+                  "supported K2 V splits are 1 and 2");
+    static_assert(D % VSplit == 0);
+    static_assert(!UseTcgen05 || VSplit == 1,
+                  "TCGen05 K2 Phase 1 currently requires full V=128");
+    constexpr int kK2VTile = D / VSplit;
 
     using K1L = K1Layouts<D, CHUNK>;
-    using K2L = K2Layouts<D, CHUNK>;
+    using K2L = K2Layouts<D, CHUNK, kK2VTile>;
     using WS = WorkspaceSizes<CHUNK, D>;
 
     // TMA layouts for Kernel 1
     using TMAQKLayout = typename K1L::TMAQKLayout;
     using TMAGLayout = typename K1L::TMAGLayout;
     using TMABetaSmemLayout = typename K1L::TMABetaSmemLayout;
-    using TMAVOLayout = typename K1L::TMAVOLayout;
+    using K1TMAVOLayout = typename K1L::TMAVOLayout;
     using TMALMLayout = typename K1L::TMALMLayout;
     using TMAGTotalSmemLayout = typename K1L::TMAGTotalSmemLayout;
 
     // TMA layouts for Kernel 2
+    using K2TMAVOLayout = typename K2L::TMAVOLayout;
     using TMAStateSmemLayout = typename K2L::TMAStateSmemLayout;
     using TMAFP32StateSmemLayout = typename K2L::TMAFP32StateSmemLayout;
 
@@ -95,25 +103,27 @@ void launch_fwd(
     Tensor m_dt_bias = make_tensor(make_gmem_ptr(dt_bias_ptr), dt_bias_gmem_layout);
     auto tma_load_dt_bias = make_tma_copy(SM90_TMA_LOAD{}, m_dt_bias, TMAGTotalSmemLayout{});
 
-    auto tma_store_ws_kd  = make_tma_copy(SM90_TMA_STORE{}, m_ws_kd, TMAVOLayout{});
-    auto tma_store_ws_qd  = make_tma_copy(SM90_TMA_STORE{}, m_ws_qd, TMAVOLayout{});
-    auto tma_store_ws_kr  = make_tma_copy(SM90_TMA_STORE{}, m_ws_kr, TMAVOLayout{});
+    auto tma_store_ws_kd  = make_tma_copy(SM90_TMA_STORE{}, m_ws_kd, K1TMAVOLayout{});
+    auto tma_store_ws_qd  = make_tma_copy(SM90_TMA_STORE{}, m_ws_qd, K1TMAVOLayout{});
+    auto tma_store_ws_kr  = make_tma_copy(SM90_TMA_STORE{}, m_ws_kr, K1TMAVOLayout{});
     auto tma_store_ws_gt  = make_tma_copy(SM90_TMA_STORE{}, m_ws_gt, TMAGTotalSmemLayout{});
     auto tma_store_ws_inv = make_tma_copy(SM90_TMA_STORE{}, m_ws_inv, TMALMLayout{});
     auto tma_store_ws_mqk = make_tma_copy(SM90_TMA_STORE{}, m_ws_mqk, TMALMLayout{});
 
     // --- TMA descriptors for Kernel 2 (loads: v,beta,workspace; load/store: state,out)
-    auto tma_load_v     = make_tma_copy(SM90_TMA_LOAD{}, m_v, TMAVOLayout{});
+    // v/out are V-tiled for K2. The q/k-derived workspace remains full-width
+    // in K and must continue to use K1TMAVOLayout.
+    auto tma_load_v     = make_tma_copy(SM90_TMA_LOAD{}, m_v, K2TMAVOLayout{});
     auto tma_load_beta2 = make_tma_copy(SM90_TMA_LOAD{}, m_beta, TMABetaSmemLayout{});
 
-    auto tma_load_ws_kd  = make_tma_copy(SM90_TMA_LOAD{}, m_ws_kd, TMAVOLayout{});
-    auto tma_load_ws_qd  = make_tma_copy(SM90_TMA_LOAD{}, m_ws_qd, TMAVOLayout{});
-    auto tma_load_ws_kr  = make_tma_copy(SM90_TMA_LOAD{}, m_ws_kr, TMAVOLayout{});
+    auto tma_load_ws_kd  = make_tma_copy(SM90_TMA_LOAD{}, m_ws_kd, K1TMAVOLayout{});
+    auto tma_load_ws_qd  = make_tma_copy(SM90_TMA_LOAD{}, m_ws_qd, K1TMAVOLayout{});
+    auto tma_load_ws_kr  = make_tma_copy(SM90_TMA_LOAD{}, m_ws_kr, K1TMAVOLayout{});
     auto tma_load_ws_gt  = make_tma_copy(SM90_TMA_LOAD{}, m_ws_gt, TMAGTotalSmemLayout{});
     auto tma_load_ws_inv = make_tma_copy(SM90_TMA_LOAD{}, m_ws_inv, TMALMLayout{});
     auto tma_load_ws_mqk = make_tma_copy(SM90_TMA_LOAD{}, m_ws_mqk, TMALMLayout{});
 
-    auto tma_store_out = make_tma_copy(SM90_TMA_STORE{}, m_out, TMAVOLayout{});
+    auto tma_store_out = make_tma_copy(SM90_TMA_STORE{}, m_out, K2TMAVOLayout{});
 
     // --- State TMA descriptors (conditional on HasStateIn/HasStateOut and StateFP32)
     auto make_state_tma = [&]() {
@@ -183,8 +193,9 @@ void launch_fwd(
     // ===== Launch Kernel 2 (recurrence) =====
 #if BLOCK_LEVEL_K2 >= 0
     {
-        constexpr int kK2Threads = 32 * 2 + 128;
-        using SharedStorageK2T = SharedStorageK2<K2L, kInputStages, kOutputStages>;
+        constexpr int kK2Threads = 32 * 2 + kK2VTile;
+        using SharedStorageK2T = SharedStorageK2<
+            K2L, kInputStages, kOutputStages, UseTcgen05>;
         int smem_size_k2 = sizeof(SharedStorageK2T);
 
         auto kernel2 = _flash_kda_fwd_recurrence<
@@ -194,13 +205,13 @@ void launch_fwd(
             decltype(tma_load_initial_state),
             decltype(tma_store_final_state),
             decltype(tma_store_out),
-            CHUNK, D, kInputStages, kOutputStages, kK2Threads,
-            HasStateIn, HasStateOut, StateFP32, IsVarlen
+            CHUNK, D, kK2VTile, kInputStages, kOutputStages, kK2Threads,
+            UseTcgen05, HasStateIn, HasStateOut, StateFP32, IsVarlen
         >;
 
         cudaFuncSetAttribute(kernel2, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size_k2);
 
-        dim3 grid_k2(N, H);
+        dim3 grid_k2(N, H, VSplit);
         dim3 block_k2(kK2Threads);
 
         kernel2<<<grid_k2, block_k2, smem_size_k2, stream>>>(
@@ -217,22 +228,26 @@ void launch_fwd(
 }
 
 // Explicit instantiations
-#define INSTANTIATE_LAUNCH_FWD(D, HI, HO, FP32, VL) \
-    template void launch_fwd<D, HI, HO, FP32, VL>( \
+#define INSTANTIATE_LAUNCH_FWD(D, HI, HO, FP32, VL, VS, TC) \
+    template void launch_fwd<D, HI, HO, FP32, VL, VS, TC>( \
         cutlass::bfloat16_t const*, cutlass::bfloat16_t const*, \
         cutlass::bfloat16_t const*, cutlass::bfloat16_t const*, \
         cutlass::bfloat16_t const*, void const*, float, void*, \
         cutlass::bfloat16_t*, void*, int, int, int, int, \
         int64_t const*, float const*, float const*, float, cudaStream_t);
 
-#define INSTANTIATE_STATE_VARIANTS(VL) \
-    INSTANTIATE_LAUNCH_FWD(128, true,  true,  false, VL) \
-    INSTANTIATE_LAUNCH_FWD(128, true,  true,  true,  VL) \
-    INSTANTIATE_LAUNCH_FWD(128, false, false, false, VL) \
-    INSTANTIATE_LAUNCH_FWD(128, false, true,  false, VL) \
-    INSTANTIATE_LAUNCH_FWD(128, true,  false, false, VL) \
-    INSTANTIATE_LAUNCH_FWD(128, false, true,  true,  VL) \
-    INSTANTIATE_LAUNCH_FWD(128, true,  false, true,  VL)
+#define INSTANTIATE_STATE_VARIANTS(VL, VS, TC) \
+    INSTANTIATE_LAUNCH_FWD(128, true,  true,  false, VL, VS, TC) \
+    INSTANTIATE_LAUNCH_FWD(128, true,  true,  true,  VL, VS, TC) \
+    INSTANTIATE_LAUNCH_FWD(128, false, false, false, VL, VS, TC) \
+    INSTANTIATE_LAUNCH_FWD(128, false, true,  false, VL, VS, TC) \
+    INSTANTIATE_LAUNCH_FWD(128, true,  false, false, VL, VS, TC) \
+    INSTANTIATE_LAUNCH_FWD(128, false, true,  true,  VL, VS, TC) \
+    INSTANTIATE_LAUNCH_FWD(128, true,  false, true,  VL, VS, TC)
 
-INSTANTIATE_STATE_VARIANTS(true)   // varlen
-INSTANTIATE_STATE_VARIANTS(false)  // non-varlen
+INSTANTIATE_STATE_VARIANTS(true, 1, false)    // varlen baseline
+INSTANTIATE_STATE_VARIANTS(false, 1, false)   // non-varlen baseline
+INSTANTIATE_STATE_VARIANTS(true, 2, false)    // varlen V-parallel
+INSTANTIATE_STATE_VARIANTS(false, 2, false)   // non-varlen V-parallel
+INSTANTIATE_STATE_VARIANTS(true, 1, true)     // varlen TCGen05 Phase 1
+INSTANTIATE_STATE_VARIANTS(false, 1, true)    // non-varlen TCGen05 Phase 1
