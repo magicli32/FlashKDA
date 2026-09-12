@@ -1464,6 +1464,25 @@ __global__ void __launch_bounds__(NumThreads, 1) _flash_kda_fwd_recurrence_bf16(
             BF16 beta0 = BF16(sigmoid_tanh_approx_f32(float(beta_tile(beta_smem_offset + group_id))));
             BF16 beta1 = BF16(sigmoid_tanh_approx_f32(float(beta_tile(beta_smem_offset + group_id + 8))));
 
+            // P4-B: prefetch Mqk into an independent MMA-A fragment.
+            // tCrA_k remains the INV fragment used by Phase 3.
+            Tensor tCrAi_mqk =
+                make_fragment_like<BF16>(
+                    thr_mma.partition_fragment_A(A_ref));
+            auto tCrAi_mqk_view =
+                smem_thr_copy_A.retile_D(tCrAi_mqk);
+            auto tCrA_mqk =
+                thr_mma.partition_fragment_A(A_ref);
+
+            copy(
+                smem_tiled_copy_A,
+                smem_thr_copy_A.partition_S(Mqk),
+                tCrAi_mqk_view);
+            cute::transform(
+                tCrAi_mqk,
+                tCrA_mqk,
+                cute::identity{});
+
             // ======== Phase 3: u = (v - u) * beta; u = INV @ u (per block) ========
             SFragT u_bf16[2];
             uint32_t u_b_regs[4];
@@ -1501,9 +1520,6 @@ __global__ void __launch_bounds__(NumThreads, 1) _flash_kda_fwd_recurrence_bf16(
             }
 
             // ======== Phase 4: Load Mqk, MOVM_T → tCrB_u_arr, Mqk@U + add out ========
-            copy(smem_tiled_copy_A, smem_thr_copy_A.partition_S(Mqk), tCrAi_k_view);
-            cute::transform(tCrAi_k, tCrA_k, cute::identity{});
-
             BFragT_u tCrB_u_arr[2];
 
             #pragma unroll
@@ -1520,7 +1536,7 @@ __global__ void __launch_bounds__(NumThreads, 1) _flash_kda_fwd_recurrence_bf16(
                 b_dst[2] = u_b_regs[2]; b_dst[3] = u_b_regs[3];
 
                 clear(out_acc[i]);
-                gemm(thr_mma, tCrA_k(_,_,Int<0>{}), tCrB_u_arr[i](_,_,Int<0>{}), out_acc[i]);
+                gemm(thr_mma, tCrA_mqk(_,_,Int<0>{}), tCrB_u_arr[i](_,_,Int<0>{}), out_acc[i]);
 
                 SFragT gemm_bf16;
                 cute::transform(out_acc[i], gemm_bf16, [] __device__ (float x) { return BF16(x); });
