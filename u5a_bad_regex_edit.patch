@@ -1,0 +1,336 @@
+diff --git a/csrc/smxx/fwd_launch.cu b/csrc/smxx/fwd_launch.cu
+index c45f829..66ffcac 100644
+--- a/csrc/smxx/fwd_launch.cu
++++ b/csrc/smxx/fwd_launch.cu
+@@ -186,312 +186,24 @@ void launch_fwd(
+ 
+     // --- State TMA descriptors (conditional on HasStateIn/HasStateOut and StateFP32)
+     auto make_state_tma = [&]() {
+-        if constexpr (StateFP32) {
+-            // FP32 state TMA descriptors
+-            auto m_initial_fp32 = make_tensor(
+-                make_gmem_ptr(static_cast<float const*>(initial_state_ptr)), state_in_gmem_layout);
+-            auto m_final_fp32 = make_tensor(
+-                make_gmem_ptr(static_cast<float*>(final_state_ptr)), state_out_gmem_layout);
+-            auto tma_load = make_tma_copy(SM90_TMA_LOAD{}, m_initial_fp32, TMAFP32StateSmemLayout{});
+-            auto tma_store = make_tma_copy(SM90_TMA_STORE{}, m_final_fp32, TMAFP32StateSmemLayout{});
+-            return cute::make_tuple(tma_load, tma_store);
+-        } else {
+-            // BF16 state TMA descriptors (or dummy for no-state)
+-            auto state_ptr_load = HasStateIn
+-                ? static_cast<BF16 const*>(initial_state_ptr)
+-                : reinterpret_cast<BF16 const*>(out_ptr);  // dummy, never used
+-            auto state_ptr_store = HasStateOut
+-                ? static_cast<BF16*>(final_state_ptr)
+-                : reinterpret_cast<BF16*>(out_ptr);  // dummy, never used
+-            auto m_init = make_tensor(make_gmem_ptr(state_ptr_load), state_in_gmem_layout);
+-            auto m_final = make_tensor(make_gmem_ptr(state_ptr_store), state_out_gmem_layout);
+-            auto tma_load = make_tma_copy(SM90_TMA_LOAD{}, m_init, TMAStateSmemLayout{});
+-            auto tma_store = make_tma_copy(SM90_TMA_STORE{}, m_final, TMAStateSmemLayout{});
+-            return cute::make_tuple(tma_load, tma_store);
+-        }
+-    };
+-    auto [tma_load_initial_state, tma_store_final_state] = make_state_tma();
+-        auto correction_state_gmem_layout =
+-        make_layout(
+-            make_shape(N * H, D, D),
+-            LayoutRight{}
+-        );
+-
+-    auto correction_state_load_ptr =
+-        correction_state_ptr != nullptr
+-            ? static_cast<float const*>(correction_state_ptr)
+-            : reinterpret_cast<float const*>(out_ptr);
+-
+-    auto m_correction_state =
+-        make_tensor(
+-            make_gmem_ptr(correction_state_load_ptr),
+-            correction_state_gmem_layout
+-        );
+-
+-    auto tma_load_correction_state =
+-        make_tma_copy(
+-            SM90_TMA_LOAD{},
+-            m_correction_state,
+-            TMAFP32StateSmemLayout{}
+-        );
+-
+-#if BLOCK_LEVEL_K1 >= 0
+-    cudaMemsetAsync(ws_ready, 0, ready_bytes, stream);
+-#endif
+-
+-    // ============================================================
+-    // P0-B: experimental K1 producer / K2 consumer overlap.
+-    //
+-    // For now, enable it only for our primary fixed benchmark:
+-    //   N=1, T=8192, H=96, D=128.
+-    //
+-    // All other shapes keep the original same-stream scheduling.
+-    // ============================================================
+-    bool use_k1k2_overlap = false;
+-    cudaStream_t k1_stream = stream;
+-    cudaStream_t k2_stream = stream;
+-
+-    cudaEvent_t producer_done_event = nullptr;
+-    cudaEvent_t consumer_done_event = nullptr;
+-
+-#if BLOCK_LEVEL_K1 >= 0 && BLOCK_LEVEL_K2 >= 0
+-    if constexpr (!IsVarlen) {
+-        use_k1k2_overlap =
+-            (N == 1 && T_total == 8192 && (H == 96 || H == 64));
+-    }
+-
+-    // Benchmark/debug switch: allow the exact same binary to fall back
+-    // to serial K1 -> K2 scheduling.
+-    if (const char* env = std::getenv("FLASH_KDA_DISABLE_K1K2_OVERLAP")) {
+-        if (std::atoi(env) != 0) {
+-            use_k1k2_overlap = false;
+-        }
+-    }
+-
+-    if (use_k1k2_overlap) {
+-        // Cached per-host-thread objects: avoid stream/event creation
+-        // overhead on every ~1 ms forward call.
+-        static thread_local cudaStream_t producer_stream = nullptr;
+-        static thread_local cudaStream_t consumer_stream = nullptr;
+-
+-        static thread_local cudaEvent_t producer_start_event = nullptr;
+-        static thread_local cudaEvent_t producer_done_event_tls = nullptr;
+-        static thread_local cudaEvent_t consumer_done_event_tls = nullptr;
+-
+-        if (producer_stream == nullptr) {
+-            int minPriority = 0;
+-            int maxPriority = 0;
+-
+-            cudaDeviceGetStreamPriorityRange(
+-                &minPriority,
+-                &maxPriority
+-            );
+-
+-            // K1 always stays at the lowest/default priority.
+-            cudaStreamCreateWithPriority(
+-                &producer_stream,
+-                cudaStreamNonBlocking,
+-                minPriority
+-            );
+-
+-            // P0-F:
+-            // Select K2 priority at runtime so the exact same binary can
+-            // sweep the producer/consumer scheduling tradeoff.
+-            int consumerPriority = maxPriority;
+-
+-            if (const char* env =
+-                    std::getenv("FLASH_KDA_K2_PRIORITY")) {
+-                consumerPriority = std::atoi(env);
+-            }
+-
+-            // Clamp to the meaningful device range.
+-            // On B300 measured range is [-5, 0].
+-            if (consumerPriority < maxPriority) {
+-                consumerPriority = maxPriority;
+-            }
+-            if (consumerPriority > minPriority) {
+-                consumerPriority = minPriority;
+-            }
+-
+-            cudaStreamCreateWithPriority(
+-                &consumer_stream,
+-                cudaStreamNonBlocking,
+-                consumerPriority
+-            );
+-
+-            cudaEventCreateWithFlags(
+-                &producer_start_event,
+-                cudaEventDisableTiming
+-            );
+-
+-            cudaEventCreateWithFlags(
+-                &producer_done_event_tls,
+-                cudaEventDisableTiming
+-            );
+-
+-            cudaEventCreateWithFlags(
+-                &consumer_done_event_tls,
+-                cudaEventDisableTiming
+-            );
+-        }
+-
+-        // Everything already queued on the PyTorch/current stream
+-        // (including ready memset and upstream tensor producers)
+-        // must become visible before K1 starts.
+-        cudaEventRecord(producer_start_event, stream);
+-        cudaStreamWaitEvent(
+-            producer_stream,
+-            producer_start_event,
+-            0
+-        );
+-
+-        cudaStreamWaitEvent(
+-            consumer_stream,
+-            producer_start_event,
+-            0
+-        );
+-
+-        k1_stream = producer_stream;
+-        k2_stream = consumer_stream;
+-
+-        producer_done_event = producer_done_event_tls;
+-        consumer_done_event = consumer_done_event_tls;
+-    }
+-#endif
+-
+-    // ===== Launch Kernel 1 (prepare) =====
+-#if BLOCK_LEVEL_K1 >= 0
+-    {
+-        constexpr int kK1Threads = 256;
+-        using SharedStorageK1T = SharedStorageK1<K1L>;
+-        int smem_size_k1 = sizeof(SharedStorageK1T);
+-
+-        // P0-E: optional occupancy throttle for the K1 producer.
+-        //
+-        // Read only once per process. Each benchmark sweep value is
+-        // run in a separate Python process.
+-        static int k1_reserved_smem = []() {
+-            const char* env = std::getenv("FLASH_KDA_K1_RESERVE_KB");
+-
+-            if (env == nullptr) {
+-                return 0;
+-            }
+-
+-            int kb = std::atoi(env);
+-            return kb > 0 ? kb * 1024 : 0;
+-        }();
+-
+-        int smem_size_k1_launch = smem_size_k1;
+-
+-        if (use_k1k2_overlap &&
+-            k1_reserved_smem > smem_size_k1_launch) {
+-            smem_size_k1_launch = k1_reserved_smem;
+-        }
+-
+-        bool use_uniform_h96_k1_fast = false;
+-
+-        if constexpr (IsVarlen) {
+-            const char* fast_env =
+-                std::getenv("FLASH_KDA_UNIFORM_H96_K1_FAST");
+-
+-            use_uniform_h96_k1_fast =
+-                fast_env != nullptr &&
+-                std::atoi(fast_env) != 0 &&
+-                N == 8 &&
+-                T_total == 8192 &&
+-                H == 96 &&
+-                D == 128;
+-        }
+-
+-        auto kernel1 = _flash_kda_fwd_prepare<
+-            decltype(tma_load_q), decltype(tma_load_k),
+-            decltype(tma_load_beta),
+-            decltype(tma_load_g), decltype(tma_load_dt_bias),
+-            decltype(tma_store_ws_kd), decltype(tma_store_ws_qd), decltype(tma_store_ws_kr),
+-            decltype(tma_store_ws_gt), decltype(tma_store_ws_inv), decltype(tma_store_ws_mqk),
+-            CHUNK, D, kK1Threads, IsVarlen
+-        >;
+-
+-        if constexpr (IsVarlen) {
+-            if (use_uniform_h96_k1_fast) {
+-                kernel1 = _flash_kda_fwd_prepare<
+-                    decltype(tma_load_q), decltype(tma_load_k),
+-                    decltype(tma_load_beta),
+-                    decltype(tma_load_g), decltype(tma_load_dt_bias),
+-                    decltype(tma_store_ws_kd), decltype(tma_store_ws_qd), decltype(tma_store_ws_kr),
+-                    decltype(tma_store_ws_gt), decltype(tma_store_ws_inv), decltype(tma_store_ws_mqk),
+-                    CHUNK, D, kK1Threads, true, false, true
+-                >;
+-            }
+-        }
+-
+-        cudaFuncSetAttribute(
+-            kernel1,
+-            cudaFuncAttributeMaxDynamicSharedMemorySize,
+-            smem_size_k1_launch
+-        );
+-
+-        if constexpr (IsVarlen) {
+-            if (!use_uniform_h96_k1_fast) {
+-                _flash_kda_build_tile_prefix<<<1, 32, 0, stream>>>(
+-                    cu_seqlens_ptr, N, CHUNK, ws_tile_prefix);
+-            }
+-        }
+-
+-        int k1_tiles = total_tiles;
+-
+-        if (use_uniform_h96_k1_fast) {
+-            int T_seq = T_total / N;
+-            int tiles_per_seq =
+-                (T_seq + CHUNK - 1) / CHUNK;
+-            k1_tiles = N * tiles_per_seq;
+-        }
+-
+-        dim3 grid_k1 = use_k1k2_overlap
+-            ? dim3(k1_tiles * H, 1, 1)
+-            : dim3(k1_tiles, H, 1);
+-
+-        dim3 block_k1(kK1Threads);
+-
+-        kernel1<<<grid_k1, block_k1, smem_size_k1_launch, k1_stream>>>(
+-            tma_load_q, tma_load_k, tma_load_beta,
+-            tma_load_g, tma_load_dt_bias,
+-            tma_store_ws_kd, tma_store_ws_qd, tma_store_ws_kr,
+-            tma_store_ws_gt, tma_store_ws_inv, tma_store_ws_mqk,
+-            scale, T_total, H, N, cu_seqlens_ptr, total_tiles,
+-            A_log_ptr, gate_scale, ws_tile_prefix, nullptr, ws_ready, ws_raw
+-        );
+-
+-        if (use_k1k2_overlap) {
+-            cudaEventRecord(
+-                producer_done_event,
+-                k1_stream
+-            );
+-        }
+-    }
+-#endif
+-
+-    // ===== Launch Kernel 2 (recurrence) =====
+-#if BLOCK_LEVEL_K2 >= 0
+-    {
+-        constexpr int kK2Threads = 32 * 2 + 128;
+-        using SharedStorageK2T = SharedStorageK2<K2L, kInputStages, kOutputStages>;
+-        int smem_size_k2 = sizeof(SharedStorageK2T);
+-
+-        auto kernel2 = [&]() {
+             if constexpr (StateFP32) {
+-                // FP32 keeps the P1/P0-L codegen path.
+-                return _flash_kda_fwd_recurrence<
++                // U5-A diagnostic:
++                // the register-resident kernel already implements FP32
++                // initial/final state conversion. Reuse it instead of the
++                // older shared-state FP32 recurrence.
++                return _flash_kda_fwd_recurrence_bf16<
+                     decltype(tma_load_v), decltype(tma_load_beta2),
+                     decltype(tma_load_ws_kd), decltype(tma_load_ws_qd), decltype(tma_load_ws_kr),
+                     decltype(tma_load_ws_gt), decltype(tma_load_ws_inv), decltype(tma_load_ws_mqk),
+                     decltype(tma_load_initial_state),
++                    decltype(tma_load_correction_state),
+                     decltype(tma_store_final_state),
+                     decltype(tma_store_out),
+                     CHUNK, D, kInputStages, kOutputStages, kK2Threads,
+-                    HasStateIn, HasStateOut, StateFP32, IsVarlen
++                    HasStateIn, HasStateOut, StateFP32, IsVarlen,
++                    false
+                 >;
+-		            } else if constexpr (HasStateIn && HasStateOut) {
++            } else if constexpr (HasStateIn && HasStateOut) {
+                 // Stateful BF16:
+                 // keep the P2 register-resident recurrent-state winner.
+                 if (use_direct_initial) {
+@@ -542,8 +254,7 @@ void launch_fwd(
+         dim3 grid_k2(N, H);
+         dim3 block_k2(kK2Threads);
+ 
+-	        if constexpr (
+-            !StateFP32 &&
++        if constexpr (
+             HasStateIn &&
+             HasStateOut
+         ) {

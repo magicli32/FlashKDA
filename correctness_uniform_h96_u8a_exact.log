@@ -1,0 +1,6 @@
+bf16 output          equal=True mismatch=0 max_abs=0
+bf16 state           equal=True mismatch=0 max_abs=0
+none output          equal=True mismatch=0 max_abs=0
+fp32 output          equal=True mismatch=0 max_abs=0
+fp32 state           equal=True mismatch=0 max_abs=0
+UNIFORM_H96_U8A_EXACT_MATCH=PASS

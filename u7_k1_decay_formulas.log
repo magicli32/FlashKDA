@@ -1,0 +1,161 @@
+            k_smem[my_row * D + my_col + i] = BF16(k_vals[i] * k_inv);
+        }
+    }
+    __syncthreads();
+
+    // --- Fused gate activation + cumsum + k tail zero-fill ---
+    // Threads 0-127: gate(g_bf16 + dt_bias) → cumulative sum, eliminates raw-g smem round-trip
+    // Threads 128-255: zero k for tail rows
+    {
+        int actual_len = min(CHUNK, seq_len - local_t * CHUNK);
+        if (compute_tid < 128) {
+            int col = compute_tid;
+            BF16 const* g_bf16_smem = shared_storage.g_bf16.begin();
+            float dt = shared_storage.dt_bias.begin()[col];
+            float* g_smem = shared_storage.g.begin();
+            float sum = 0.0f;
+            #pragma unroll
+            for (int row = 0; row < CHUNK; ++row) {
+                float g_val;
+                if (row < actual_len) {
+                    g_val = bf16_to_f32(g_bf16_smem[row * D + col]) + dt;
+                    g_val = a_log_exp * g_val;
+                    g_val = gate_scale * sigmoid_tanh_approx_f32(g_val);
+                } else {
+                    g_val = 0.0f;
+                }
+                sum += g_val;
+                g_smem[row * D + col] = sum;
+            }
+            shared_storage.g_total.begin()[col] = sum;
+        } else {
+            int col = compute_tid - 128;
+            BF16* k_smem = shared_storage.k.begin();
+            for (int row = actual_len; row < CHUNK; ++row) {
+                k_smem[row * D + col] = BF16(0);
+            }
+        }
+    }
+    __syncthreads();
+
+    Tensor q_tile = make_tensor(make_smem_ptr(shared_storage.q.begin()), QKLayout{});
+    Tensor k_tile = make_tensor(make_smem_ptr(shared_storage.k.begin()), QKLayout{});
+    Tensor g_tile = make_tensor(make_smem_ptr(shared_storage.g.begin()), GLayout{});
+    Tensor beta_tile = make_tensor(make_smem_ptr(shared_storage.beta.begin()), BetaSmemLayout{});
+    int beta_smem_offset = (head_idx * T_total + int(bos) + local_t * CHUNK) & 7;
+
+    Tensor k_restored = make_tensor(make_smem_ptr(shared_storage.k_restored.begin()), MMALayout{});
+    Tensor k_decayed = make_tensor(make_smem_ptr(shared_storage.k_decayed.begin()), MMALayout{});
+    Tensor q_decayed = make_tensor(make_smem_ptr(shared_storage.q_decayed.begin()), MMALayout{});
+    Tensor k_inv = make_tensor(make_smem_ptr(shared_storage.k_inv.begin()), MMALayout{});
+    Tensor g_total = make_tensor(make_smem_ptr(shared_storage.g_total.begin()), GTotalLayout{});
+
+    // exp_g_total: compute exp(g_total) in smem before decay_apply
+    if (compute_tid < 128) {
+        float x = g_total(compute_tid);
+        g_total(compute_tid) = ex2_approx_ftz_f32(x);
+    }
+    __syncthreads();
+
+// decay_apply
+    if (compute_tid < 256) {
+        static_assert(D % 64 == 0);
+        static_assert(CHUNK % 8 == 0);
+
+        int lane = compute_tid % 32;
+        int warp_id = compute_tid / 32;
+        int g = lane / 4;
+        int t = lane % 4;
+
+        auto vec8_2d = make_shape(_1{}, _8{});
+        auto vec8_1d = make_shape(_8{});
+        auto thr2_2d = make_shape(_1{}, _2{});
+        auto thr2_1d = make_shape(_2{});
+
+        constexpr int N_M = CHUNK / 8;
+        constexpr int N_N = D / 64;
+        constexpr int N_TILES = N_M * N_N;
+
+        float reg_g[N_TILES][2];
+        BF16  reg_q[N_TILES][2];
+        BF16  reg_k[N_TILES][2];
+        float reg_gt[N_TILES][2];
+
+        #pragma unroll
+        for (int m_blk = 0; m_blk < CHUNK; m_blk += 8) {
+            #pragma unroll
+            for (int n_blk = 0; n_blk < D; n_blk += 64) {
+                int tile_idx = (m_blk / 8) * N_N + (n_blk / 64);
+                int row = m_blk + ((warp_id + g) % 8);
+                int col_base = n_blk + g * 8;
+                int col_tile = col_base / 8;
+
+                Tensor tile_g  = local_tile(g_tile, vec8_2d, make_coord(row, col_tile));
+                Tensor tile_q  = local_tile(q_tile, vec8_2d, make_coord(row, col_tile));
+                Tensor tile_k  = local_tile(k_tile, vec8_2d, make_coord(row, col_tile));
+                Tensor tile_gt = local_tile(g_total, vec8_1d, make_coord(col_tile));
+
+                Tensor s_g  = local_tile(tile_g,  thr2_2d, make_coord(0, t));
+                Tensor s_q  = local_tile(tile_q,  thr2_2d, make_coord(0, t));
+                Tensor s_k  = local_tile(tile_k,  thr2_2d, make_coord(0, t));
+                Tensor s_gt = local_tile(tile_gt, thr2_1d, make_coord(t));
+
+                Tensor r_g  = make_tensor_like<float>(s_g);
+                Tensor r_q  = make_tensor_like<BF16>(s_q);
+                Tensor r_k  = make_tensor_like<BF16>(s_k);
+                Tensor r_gt = make_tensor_like<float>(s_gt);
+
+                cute::copy(AutoVectorizingCopy{}, s_g, r_g);
+                cute::copy(AutoVectorizingCopy{}, s_q, r_q);
+                cute::copy(AutoVectorizingCopy{}, s_k, r_k);
+                cute::copy(AutoVectorizingCopy{}, s_gt, r_gt);
+
+                #pragma unroll
+                for (int v = 0; v < 2; ++v) {
+                    reg_g[tile_idx][v]  = r_g(0, v);
+                    reg_q[tile_idx][v]  = r_q(0, v);
+                    reg_k[tile_idx][v]  = r_k(0, v);
+                    reg_gt[tile_idx][v] = r_gt(v);
+                }
+            }
+        }
+
+        // Sync before writing to union'd smem (q/k/g → k_decayed/q_decayed/k_inv)
+        // Safe: all 256 threads enter this if block (compute_tid < 256 always true)
+        __syncthreads();
+
+        #pragma unroll
+        for (int m_blk = 0; m_blk < CHUNK; m_blk += 8) {
+            #pragma unroll
+            for (int n_blk = 0; n_blk < D; n_blk += 64) {
+                int tile_idx = (m_blk / 8) * N_N + (n_blk / 64);
+                int row = m_blk + ((warp_id + g) % 8);
+                int col_base = n_blk + g * 8;
+                int col_tile = col_base / 8;
+
+                Tensor tile_qd = local_tile(q_decayed, vec8_2d, make_coord(row, col_tile));
+                Tensor tile_kd = local_tile(k_decayed, vec8_2d, make_coord(row, col_tile));
+                Tensor tile_kr = local_tile(k_restored, vec8_2d, make_coord(row, col_tile));
+                Tensor tile_ki = local_tile(k_inv, vec8_2d, make_coord(row, col_tile));
+
+                Tensor s_qd = local_tile(tile_qd, thr2_2d, make_coord(0, t));
+                Tensor s_kd = local_tile(tile_kd, thr2_2d, make_coord(0, t));
+                Tensor s_kr = local_tile(tile_kr, thr2_2d, make_coord(0, t));
+                Tensor s_ki = local_tile(tile_ki, thr2_2d, make_coord(0, t));
+
+                Tensor r_qd = make_tensor_like<BF16>(s_qd);
+                Tensor r_kd = make_tensor_like<BF16>(s_kd);
+                #pragma unroll
+                for (int v = 0; v < 2; ++v) {
+                    float g = reg_g[tile_idx][v];
+                    BF16 q = reg_q[tile_idx][v];
+                    BF16 k = reg_k[tile_idx][v];
+                    BF16 exp_cumsum = BF16(ex2_approx_ftz_f32(g));
+                    r_qd(0, v) = q * exp_cumsum * BF16(scale);
+                    r_kd(0, v) = k * exp_cumsum;
+                }
+                cute::copy(AutoVectorizingCopy{}, r_qd, s_qd);
+                cute::copy(AutoVectorizingCopy{}, r_kd, s_kd);
+
+                Tensor r_ki = make_tensor_like<BF16>(s_ki);
+                Tensor r_kr = make_tensor_like<BF16>(s_kr);

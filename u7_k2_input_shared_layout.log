@@ -1,0 +1,47 @@
+template <class Layouts, int InputStages, int OutputStages>
+struct SharedStorageK2 {
+    using BF16 = cutlass::bfloat16_t;
+    using VOLayout = typename Layouts::VOLayout;
+    using BetaSmemLayout = typename Layouts::BetaSmemLayout;
+    using StateSmemLayout = typename Layouts::StateSmemLayout;
+    using GTotalLayout = typename Layouts::GTotalLayout;
+    using LMLayout = typename Layouts::LMLayout;
+    using MMALayout = typename Layouts::MMALayout;
+
+    alignas(128) cute::ArrayEngine<BF16, cute::cosize_v<StateSmemLayout>> state_acc;
+
+    struct InputStorage {
+        alignas(128) cute::ArrayEngine<BF16, cute::cosize_v<VOLayout>> v;
+        alignas(128) cute::ArrayEngine<BF16, cute::cosize_v<BetaSmemLayout>> beta;
+        alignas(128) cute::ArrayEngine<BF16, cute::cosize_v<MMALayout>> k_decayed;
+        alignas(128) cute::ArrayEngine<BF16, cute::cosize_v<MMALayout>> q_decayed;
+        alignas(128) cute::ArrayEngine<BF16, cute::cosize_v<MMALayout>> k_restored;
+        alignas(128) cute::ArrayEngine<float, cute::cosize_v<GTotalLayout>> g_total;
+        alignas(128) cute::ArrayEngine<BF16, cute::cosize_v<LMLayout>> INV;
+        alignas(128) cute::ArrayEngine<BF16, cute::cosize_v<LMLayout>> Mqk;
+    };
+
+    struct OutputStorage {
+        alignas(128) cute::ArrayEngine<BF16, cute::cosize_v<VOLayout>> out;
+    };
+
+    // Anonymous union: pipeline buffers share space with fp32 state conversion buffer.
+    // FP32 state load/store happens before/after the pipeline loop, so no overlap.
+    union {
+        struct {
+            InputStorage input[InputStages];
+            OutputStorage output[OutputStages];
+        };
+        alignas(128) char state_fp32_buf[cute::cosize_v<StateSmemLayout> * sizeof(float)];
+    };
+
+    typename cutlass::PipelineTmaAsync<InputStages>::SharedStorage load_pipeline;
+    typename cutlass::PipelineAsync<OutputStages>::SharedStorage store_pipeline;
+    alignas(16) cutlass::arch::ClusterTransactionBarrier state_acc_tma_barrier;
+};
+
+// ==================== Kernel 2: Recurrence ====================
+
+// ============================================================
+// P2-S fallback kernel:
+// Preserve the P1 shared-state/maxnreg(120) implementation for

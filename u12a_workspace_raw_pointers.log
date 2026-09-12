@@ -1,0 +1,51 @@
+csrc/smxx/utils.cuh-76-    static constexpr int kINV       = CHUNK * CHUNK * 2;     // 512
+csrc/smxx/utils.cuh-77-    static constexpr int kMqk       = CHUNK * CHUNK * 2;     // 512
+csrc/smxx/utils.cuh-78-    static constexpr int64_t kPerTile = kKDecayed + kQDecayed + kKRestored + kGTotal + kINV + kMqk;
+csrc/smxx/utils.cuh-79-};
+csrc/smxx/utils.cuh-80-
+csrc/smxx/utils.cuh:81:struct K1WorkspaceRawPointers {
+csrc/smxx/utils.cuh-82-    cutlass::bfloat16_t* k_decayed = nullptr;
+csrc/smxx/utils.cuh-83-    cutlass::bfloat16_t* q_decayed = nullptr;
+csrc/smxx/utils.cuh-84-    cutlass::bfloat16_t* k_restored = nullptr;
+csrc/smxx/utils.cuh-85-    float* g_total = nullptr;
+csrc/smxx/utils.cuh-86-    cutlass::bfloat16_t* inv = nullptr;
+csrc/smxx/utils.cuh-87-    cutlass::bfloat16_t* mqk = nullptr;
+csrc/smxx/utils.cuh-88-};
+csrc/smxx/utils.cuh-89-
+csrc/smxx/utils.cuh-90-
+csrc/smxx/utils.cuh-91-enum class WarpRole {
+csrc/smxx/utils.cuh-92-    MMA,
+csrc/smxx/utils.cuh-93-    LOAD_QKG,
+csrc/smxx/utils.cuh-94-    STORE,
+csrc/smxx/utils.cuh-95-    NonParticipant,
+csrc/smxx/utils.cuh-96-};
+csrc/smxx/utils.cuh-97-
+csrc/smxx/utils.cuh-98-template <int Stages>
+csrc/smxx/utils.cuh-99-CUTLASS_DEVICE
+csrc/smxx/utils.cuh-100-cutlass::PipelineTmaAsync<Stages> make_load_pipeline(
+csrc/smxx/utils.cuh-101-    typename cutlass::PipelineTmaAsync<Stages>::SharedStorage& storage,
+csrc/smxx/utils.cuh-102-    uint32_t transaction_bytes,
+csrc/smxx/utils.cuh-103-    WarpRole warp_role,
+csrc/smxx/utils.cuh-104-    uint32_t num_producers,
+csrc/smxx/utils.cuh-105-    uint32_t num_consumers
+csrc/smxx/utils.cuh-106-) {
+csrc/smxx/utils.cuh-107-    using Pipeline = cutlass::PipelineTmaAsync<Stages>;
+csrc/smxx/utils.cuh-108-    typename Pipeline::Params params;
+csrc/smxx/utils.cuh-109-
+csrc/smxx/utils.cuh-110-    auto role = Pipeline::ThreadCategory::NonParticipant;
+csrc/smxx/utils.cuh-111-    bool is_leader = false;
+csrc/smxx/utils.cuh-112-    if (warp_role == WarpRole::LOAD_QKG) {
+csrc/smxx/utils.cuh-113-        role = Pipeline::ThreadCategory::Producer;
+csrc/smxx/utils.cuh-114-        is_leader = cute::elect_one_sync();
+csrc/smxx/utils.cuh-115-    } else if (warp_role == WarpRole::MMA) {
+csrc/smxx/utils.cuh-116-        role = Pipeline::ThreadCategory::Consumer;
+csrc/smxx/utils.cuh-117-    }
+csrc/smxx/utils.cuh-118-
+csrc/smxx/utils.cuh-119-    params.transaction_bytes = transaction_bytes;
+csrc/smxx/utils.cuh-120-    params.role = role;
+csrc/smxx/utils.cuh-121-    params.is_leader = is_leader;
+csrc/smxx/utils.cuh-122-    params.num_consumers = num_consumers;
+csrc/smxx/utils.cuh-123-    params.num_producers = num_producers;
+csrc/smxx/utils.cuh-124-
+csrc/smxx/utils.cuh-125-    Pipeline pipeline(storage, params, Shape<_1,_1>{});
+csrc/smxx/utils.cuh-126-    cutlass::pipeline_init_wait(1);

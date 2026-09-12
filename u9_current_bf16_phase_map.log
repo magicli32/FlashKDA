@@ -1,0 +1,80 @@
+   941	    WarpRole warp_role = WarpRole::NonParticipant;
+   943	        warp_role = WarpRole::MMA;
+   945	        warp_role = WarpRole::LOAD_QKG;
+   947	        warp_role = WarpRole::STORE;
+   953	    LoadPipeline load_pipeline = make_load_pipeline<InputStages>(
+   954	        shared_storage.load_pipeline,
+   956	        warp_role, 1, kComputeThreads
+   960	    StorePipeline store_pipeline = make_store_pipeline<OutputStages>(
+   961	        shared_storage.store_pipeline,
+   962	        warp_role, kComputeThreads, 1
+  1013	                warp_role == WarpRole::LOAD_QKG &&
+  1026	                    .state_acc_tma_barrier
+  1033	                    .state_acc_tma_barrier
+  1093	                                .state_acc_tma_barrier
+  1106	                .state_acc_tma_barrier
+  1121	                shared_storage.state_acc.begin(),
+  1150	                warp_role == WarpRole::LOAD_QKG &&
+  1163	                    .state_acc_tma_barrier
+  1170	                    .state_acc_tma_barrier
+  1210	                                .state_acc.begin()
+  1225	                                .state_acc_tma_barrier
+  1238	                .state_acc_tma_barrier
+  1253	            warp_role == WarpRole::LOAD_QKG &&
+  1266	                .state_acc_tma_barrier
+  1273	                .state_acc_tma_barrier
+  1329	                            .state_acc_tma_barrier
+  1342	            .state_acc_tma_barrier
+  1357	            shared_storage.state_acc.begin(),
+  1365	            shared_storage.state_acc.begin();
+  1389	    if (warp_role == WarpRole::LOAD_QKG && lane_predicate) {
+  1398	            load_pipeline.producer_acquire(load_write);
+  1400	            LoadBarrierType* tma_barrier = load_pipeline.producer_get_barrier(load_write);
+  1494	        load_pipeline.producer_tail(load_write);
+  1499	    if (warp_role == WarpRole::MMA) {
+  1521	            make_smem_ptr(shared_storage.state_acc.begin()),
+  1524	        auto resident_mma = make_tiled_mma(
+  1581	            store_pipeline.producer_acquire(out_write);
+  1582	            load_pipeline.consumer_wait(load_read);
+  1602	            Tensor s_acc = make_tensor(make_smem_ptr(shared_storage.state_acc.begin()), StateSmemLayout{});
+  1603	            Tensor s_acc_T = make_tensor(make_smem_ptr(shared_storage.state_acc.begin()), TransposedStateSmemLayout{});
+  1613	            auto mma = make_tiled_mma(
+  1629	            // A copy: MN_INTER → LDSM_T (for k_restored_t in Phase 7)
+  1643	            // C load/store transposed (for Phase 6 state access via s_acc_T)
+  1670	            AccFragT u_acc[2], out_acc[2];
+  1672	            for (int i = 0; i < 2; ++i) { u_acc[i] = thr_mma.make_fragment_C(tCrC_ref); clear(u_acc[i]); }
+  1674	            for (int i = 0; i < 2; ++i) { out_acc[i] = thr_mma.make_fragment_C(tCrC_ref); clear(out_acc[i]); }
+  1676	            // ======== Phase 1: Dual GEMM k@s and q@s (k-loop, 2 blocks per warp) ========
+  1732	                gemm(
+  1736	                    u_acc[0]);
+  1738	                gemm(
+  1742	                    out_acc[0]);
+  1782	                gemm(
+  1786	                    u_acc[1]);
+  1788	                gemm(
+  1792	                    out_acc[1]);
+  1795	            // ======== Phase 2: Cast out (keep in regs), load v/INV/beta ========
+  1799	                cute::transform(out_acc[i], out_bf16[i], [] __device__ (float x) { return BF16(x); });
+  1814	            // ======== Phase 3: u = (v - u) * beta; u = INV @ u (per block) ========
+  1820	                cute::transform(u_acc[i], u_bf16[i], [] __device__ (float x) { return BF16(x); });
+  1844	                clear(u_acc[i]);
+  1845	                gemm(thr_mma, tCrA_k(_,_,Int<0>{}), tCrB_u_tmp(_,_,Int<0>{}), u_acc[i]);
+  1847	                cute::transform(u_acc[i], u_bf16[i], [] __device__ (float x) { return BF16(x); });
+  1850	            // ======== Phase 4: Load Mqk, MOVM_T → tCrB_u_arr, Mqk@U + add out ========
+  1869	                clear(out_acc[i]);
+  1870	                gemm(thr_mma, tCrA_k(_,_,Int<0>{}), tCrB_u_arr[i](_,_,Int<0>{}), out_acc[i]);
+  1873	                cute::transform(out_acc[i], gemm_bf16, [] __device__ (float x) { return BF16(x); });
+  1877	            // ======== Phase 5: Store final out ========
+  1884	            // ======== Phase 6: resident state update ========
+  1942	                    clear(u_acc[bi]);
+  1944	                    gemm(
+  1948	                        u_acc[bi]);
+  2004	                                    + u_acc[bi](c0));
+  2011	                                    + u_acc[bi](c1));
+  2044	            store_pipeline.producer_commit(out_write);
+  2045	            load_pipeline.consumer_release(load_read);
+  2053	    if (warp_role == WarpRole::STORE && lane_predicate) {
+  2058	            store_pipeline.consumer_wait(out_read);
+  2089	            store_pipeline.consumer_release(out_read);
+  2148	                            shared_storage.state_acc.begin()
+  2175	            shared_storage.state_acc.begin(),

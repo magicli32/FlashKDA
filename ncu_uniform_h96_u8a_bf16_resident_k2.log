@@ -1,0 +1,11 @@
+==WARNING== Note: Running with unmodified GPU clocks. If not controlled otherwise, profiling results may be inconsistent.
+==PROF== Connected to process 4191609 (/home/lcpu/88934705/.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/bin/python3.12)
+varlen shape=[8192,96,128] seq_lens=[1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024] warmup=0 iters=1 repeats=1
+==PROF== Profiling "_flash_kda_fwd_recurrence_bf16": 0%....50%....100% - 16 passes
+  flash_kda (bf16 state) : mean=0.9552 ms, min=0.9552 ms, max=0.9552 ms
+  flash_kda (no state)   : mean=0.7932 ms, min=0.7932 ms, max=0.7932 ms
+  flash_kda (fp32 state) : mean=0.8270 ms, min=0.8270 ms, max=0.8270 ms
+  chunk_kda : mean=2.8394 ms, min=2.8394 ms, max=2.8394 ms
+  chunk_gated_delta_rule : mean=1.6300 ms, min=1.6300 ms, max=1.6300 ms
+==PROF== Disconnected from process 4191609
+==PROF== Report: /home/lcpu/88934705/lish/FlashKDA-uniform-h96/ncu_uniform_h96_u8a_bf16_resident_k2.ncu-rep

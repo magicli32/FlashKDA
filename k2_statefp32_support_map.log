@@ -1,0 +1,709 @@
+92-        alignas(128) cute::ArrayEngine<BF16, cute::cosize_v<LMLayout>> Mqk;
+93-    };
+94-
+95-    struct OutputStorage {
+96-        alignas(128) cute::ArrayEngine<BF16, cute::cosize_v<VOLayout>> out;
+97-    };
+98-
+99-    // Anonymous union: pipeline buffers share space with fp32 state conversion buffer.
+100-    // FP32 state load/store happens before/after the pipeline loop, so no overlap.
+101-    union {
+102-        struct {
+103-            InputStorage input[InputStages];
+104-            OutputStorage output[OutputStages];
+105-        };
+106:        alignas(128) char state_fp32_buf[cute::cosize_v<StateSmemLayout> * sizeof(float)];
+107-    };
+108-
+109-    typename cutlass::PipelineTmaAsync<InputStages>::SharedStorage load_pipeline;
+110-    typename cutlass::PipelineAsync<OutputStages>::SharedStorage store_pipeline;
+111-    alignas(16) cutlass::arch::ClusterTransactionBarrier state_acc_tma_barrier;
+112-};
+113-
+114-// ==================== Kernel 2: Recurrence ====================
+115-
+116-// ============================================================
+117-// P2-S fallback kernel:
+118-// Preserve the P1 shared-state/maxnreg(120) implementation for
+119-// BF16 specializations that do not benefit from register-resident
+120-// recurrence state.
+--
+124-    class TmaLoadV,
+125-    class TmaLoadBeta,
+126-    class TmaLoadWsKD, class TmaLoadWsQD, class TmaLoadWsKR,
+127-    class TmaLoadWsGT, class TmaLoadWsINV, class TmaLoadWsMqk,
+128-    class TmaLoadState,
+129-    class TmaStoreState,
+130-    class TmaStoreOut,
+131-    int CHUNK,
+132-    int D,
+133-    int InputStages,
+134-    int OutputStages,
+135-    int NumThreads,
+136-    bool HasStateIn = true,
+137-    bool HasStateOut = true,
+138:    bool StateFP32 = false,
+139-    bool IsVarlen = true
+140->
+141-__global__ void __maxnreg__(120) _flash_kda_fwd_recurrence_bf16_shared(
+142-    CUTE_GRID_CONSTANT TmaLoadV const tma_load_v,
+143-    CUTE_GRID_CONSTANT TmaLoadBeta const tma_load_beta,
+144-    CUTE_GRID_CONSTANT TmaLoadWsKD const tma_load_ws_kd,
+145-    CUTE_GRID_CONSTANT TmaLoadWsQD const tma_load_ws_qd,
+146-    CUTE_GRID_CONSTANT TmaLoadWsKR const tma_load_ws_kr,
+147-    CUTE_GRID_CONSTANT TmaLoadWsGT const tma_load_ws_gt,
+148-    CUTE_GRID_CONSTANT TmaLoadWsINV const tma_load_ws_inv,
+149-    CUTE_GRID_CONSTANT TmaLoadWsMqk const tma_load_ws_mqk,
+150-    CUTE_GRID_CONSTANT TmaLoadState const tma_load_initial_state,
+151-    CUTE_GRID_CONSTANT TmaStoreState const tma_store_final_state,
+152-    CUTE_GRID_CONSTANT TmaStoreOut const tma_store_out,
+--
+238-            tile_base += (int(cu_seqlens[i + 1] - cu_seqlens[i]) + CHUNK - 1) / CHUNK;
+239-        }
+240-    } else {
+241-        int T_seq = T_total / N;
+242-        bos = seq_idx * T_seq;
+243-        eos = bos + T_seq;
+244-        tile_base = seq_idx * ((T_seq + CHUNK - 1) / CHUNK);
+245-    }
+246-    int seq_len  = int(eos - bos);
+247-    int t_tiles  = (seq_len + CHUNK - 1) / CHUNK;
+248-    bool lane_predicate = cute::elect_one_sync();
+249-
+250-    // --- Load initial state
+251-#ifndef TMA_DISABLE_ALL
+252:    if constexpr (HasStateIn && !StateFP32) {
+253-        // BF16 state: TMA load directly into state_acc
+254-        if (warp_role == WarpRole::LOAD_QKG && lane_predicate) {
+255-            using BarrierType = cutlass::arch::ClusterTransactionBarrier::ValueType;
+256-            constexpr uint32_t kStateTransactionBytes = cute::cosize_v<StateSmemLayout> * sizeof(BF16);
+257-
+258-            shared_storage.state_acc_tma_barrier.init(1);
+259-            cutlass::arch::fence_barrier_init();  // generic init -> visible to async proxy (TMA complete-tx)
+260-            shared_storage.state_acc_tma_barrier.arrive_and_expect_tx(kStateTransactionBytes);
+261-
+262-            Tensor g_init = tma_load_initial_state.get_tma_tensor(make_shape(N * H, D, D));
+263-            auto init_off = g_init.layout()(seq_idx * H + head_idx, 0, 0);
+264-            Tensor g_init_tile = make_tensor(g_init.data() + init_off,
+265-                make_layout(make_shape(Int<1>{}, Int<D>{}, Int<D>{}), stride(g_init.layout())));
+266-            Tensor s_state = make_tensor(make_smem_ptr(shared_storage.state_acc.begin()), TMAStateSmemLayout{});
+267-
+268-            auto cta_tma_load_state = tma_load_initial_state.get_slice(Int<0>{});
+269-            cute::copy(
+270-                tma_load_initial_state.with(reinterpret_cast<BarrierType&>(shared_storage.state_acc_tma_barrier)),
+271-                cta_tma_load_state.partition_S(g_init_tile),
+272-                cta_tma_load_state.partition_D(s_state)
+273-            );
+274-        }
+275-        __syncthreads();
+276-        shared_storage.state_acc_tma_barrier.wait(0);
+277-        cutlass::arch::fence_view_async_shared();
+278:    } else if constexpr (HasStateIn && StateFP32) {
+279-        // FP32 state: TMA load fp32 into pipeline buffer, then convert to bf16 in state_acc
+280-        using FP32StateSmemLayout = typename Layouts::FP32StateSmemLayout;
+281-        using TMAFP32StateSmemLayout = typename Layouts::TMAFP32StateSmemLayout;
+282-
+283-        if (warp_role == WarpRole::LOAD_QKG && lane_predicate) {
+284-            using BarrierType = cutlass::arch::ClusterTransactionBarrier::ValueType;
+285-            constexpr uint32_t kFP32StateTransactionBytes = cute::cosize_v<StateSmemLayout> * sizeof(float);
+286-
+287-            shared_storage.state_acc_tma_barrier.init(1);
+288-            cutlass::arch::fence_barrier_init();  // generic init -> visible to async proxy (TMA complete-tx)
+289-            shared_storage.state_acc_tma_barrier.arrive_and_expect_tx(kFP32StateTransactionBytes);
+290-
+291-            Tensor g_init = tma_load_initial_state.get_tma_tensor(make_shape(N * H, D, D));
+292-            auto init_off = g_init.layout()(seq_idx * H + head_idx, 0, 0);
+293-            Tensor g_init_tile = make_tensor(g_init.data() + init_off,
+294-                make_layout(make_shape(Int<1>{}, Int<D>{}, Int<D>{}), stride(g_init.layout())));
+295-            Tensor s_fp32 = make_tensor(
+296:                make_smem_ptr(reinterpret_cast<float*>(shared_storage.state_fp32_buf)),
+297-                TMAFP32StateSmemLayout{});
+298-
+299-            auto cta_tma_load_state = tma_load_initial_state.get_slice(Int<0>{});
+300-            cute::copy(
+301-                tma_load_initial_state.with(reinterpret_cast<BarrierType&>(shared_storage.state_acc_tma_barrier)),
+302-                cta_tma_load_state.partition_S(g_init_tile),
+303-                cta_tma_load_state.partition_D(s_fp32)
+304-            );
+305-        }
+306-        __syncthreads();
+307-        shared_storage.state_acc_tma_barrier.wait(0);
+308-        cutlass::arch::fence_view_async_shared();
+309-
+310-        // All threads: convert fp32 -> bf16 with layout transformation
+311:        smem_cvt_fp32_to_bf16<FP32StateSmemLayout, StateSmemLayout, D, NumThreads>(
+312:            reinterpret_cast<float*>(shared_storage.state_fp32_buf),
+313-            shared_storage.state_acc.begin(),
+314-            threadIdx.x);
+315-        __syncthreads();
+316-    } else {
+317-        // No state in: zero-initialize state_acc
+318-        {
+319-            BF16* buf = shared_storage.state_acc.begin();
+320-            constexpr int kTotal = cute::cosize_v<StateSmemLayout>;
+321-            for (int i = threadIdx.x; i < kTotal; i += NumThreads) {
+322-                buf[i] = BF16(0);
+323-            }
+324-        }
+325-        // generic writes -> visible to async proxy (TMA state store covers t_tiles==0)
+326-        cutlass::arch::fence_view_async_shared();
+--
+777-                Tensor s_out_tile = make_tensor(make_smem_ptr(out_stage_ptr), TMAVOLayout{});
+778-                cute::copy(
+779-                    tma_store_out,
+780-                    cta_tma_store.partition_S(s_out_tile),
+781-                    cta_tma_store.partition_D(g_out_tile)
+782-                );
+783-                tma_store_arrive();
+784-            }
+785-
+786-            tma_store_wait<0>();
+787-            store_pipeline.consumer_release(out_read);
+788-            ++out_read;
+789-        }
+790-
+791:        if constexpr (HasStateOut && !StateFP32) {
+792-            // BF16 state: TMA store directly from state_acc
+793-            Tensor g_final = tma_store_final_state.get_tma_tensor(make_shape(N * H, D, D));
+794-            auto state_off = g_final.layout()(seq_idx * H + head_idx, 0, 0);
+795-            Tensor g_final_tile = make_tensor(g_final.data() + state_off,
+796-                make_layout(make_shape(Int<1>{}, Int<D>{}, Int<D>{}), stride(g_final.layout())));
+797-            Tensor s_state = make_tensor(make_smem_ptr(shared_storage.state_acc.begin()), TMAStateSmemLayout{});
+798-
+799-            auto cta_tma_store_state = tma_store_final_state.get_slice(Int<0>{});
+800-            cute::copy(
+801-                tma_store_final_state,
+802-                cta_tma_store_state.partition_S(s_state),
+803-                cta_tma_store_state.partition_D(g_final_tile)
+804-            );
+805-            tma_store_arrive();
+806-        }
+807-    }
+808-
+809:    if constexpr (HasStateOut && StateFP32) {
+810-        // FP32 state: all threads sync, convert bf16->fp32, then STORE warp does TMA
+811-        using FP32StateSmemLayout = typename Layouts::FP32StateSmemLayout;
+812-        using TMAFP32StateSmemLayout = typename Layouts::TMAFP32StateSmemLayout;
+813-
+814-        __syncthreads();  // all warps sync — pipeline smem now free
+815-
+816:        smem_cvt_bf16_to_fp32<StateSmemLayout, FP32StateSmemLayout, D, NumThreads>(
+817-            shared_storage.state_acc.begin(),
+818:            reinterpret_cast<float*>(shared_storage.state_fp32_buf),
+819-            threadIdx.x);
+820-        cutlass::arch::fence_view_async_shared();  // generic-proxy writes -> visible to async proxy (TMA)
+821-        __syncthreads();  // conversion complete
+822-
+823-        if (warp_role == WarpRole::STORE && lane_predicate) {
+824-            Tensor g_final = tma_store_final_state.get_tma_tensor(make_shape(N * H, D, D));
+825-            auto state_off = g_final.layout()(seq_idx * H + head_idx, 0, 0);
+826-            Tensor g_final_tile = make_tensor(g_final.data() + state_off,
+827-                make_layout(make_shape(Int<1>{}, Int<D>{}, Int<D>{}), stride(g_final.layout())));
+828-            Tensor s_fp32 = make_tensor(
+829:                make_smem_ptr(reinterpret_cast<float*>(shared_storage.state_fp32_buf)),
+830-                TMAFP32StateSmemLayout{});
+831-
+832-            auto cta_tma_store_state = tma_store_final_state.get_slice(Int<0>{});
+833-            cute::copy(
+834-                tma_store_final_state,
+835-                cta_tma_store_state.partition_S(s_fp32),
+836-                cta_tma_store_state.partition_D(g_final_tile)
+837-            );
+838-            tma_store_arrive();
+839-        }
+840-    }
+841-
+842-    __syncthreads();
+843-#endif
+--
+848-    class TmaLoadBeta,
+849-    class TmaLoadWsKD, class TmaLoadWsQD, class TmaLoadWsKR,
+850-    class TmaLoadWsGT, class TmaLoadWsINV, class TmaLoadWsMqk,
+851-    class TmaLoadState,
+852-    class TmaLoadCorrectionState,
+853-    class TmaStoreState,
+854-    class TmaStoreOut,
+855-    int CHUNK,
+856-    int D,
+857-    int InputStages,
+858-    int OutputStages,
+859-    int NumThreads,
+860-    bool HasStateIn = true,
+861-    bool HasStateOut = true,
+862:    bool StateFP32 = false,
+863-    bool IsVarlen = true,
+864-    bool DirectMixedInitial = false
+865->
+866-__global__ void __launch_bounds__(NumThreads, 1) _flash_kda_fwd_recurrence_bf16(
+867-    CUTE_GRID_CONSTANT TmaLoadV const tma_load_v,
+868-    CUTE_GRID_CONSTANT TmaLoadBeta const tma_load_beta,
+869-    CUTE_GRID_CONSTANT TmaLoadWsKD const tma_load_ws_kd,
+870-    CUTE_GRID_CONSTANT TmaLoadWsQD const tma_load_ws_qd,
+871-    CUTE_GRID_CONSTANT TmaLoadWsKR const tma_load_ws_kr,
+872-    CUTE_GRID_CONSTANT TmaLoadWsGT const tma_load_ws_gt,
+873-    CUTE_GRID_CONSTANT TmaLoadWsINV const tma_load_ws_inv,
+874-    CUTE_GRID_CONSTANT TmaLoadWsMqk const tma_load_ws_mqk,
+875-    CUTE_GRID_CONSTANT TmaLoadState const tma_load_initial_state,
+876-    CUTE_GRID_CONSTANT TmaLoadCorrectionState const tma_load_correction_state,
+--
+964-            tile_base += (int(cu_seqlens[i + 1] - cu_seqlens[i]) + CHUNK - 1) / CHUNK;
+965-        }
+966-    } else {
+967-        int T_seq = T_total / N;
+968-        bos = seq_idx * T_seq;
+969-        eos = bos + T_seq;
+970-        tile_base = seq_idx * ((T_seq + CHUNK - 1) / CHUNK);
+971-    }
+972-    int seq_len  = int(eos - bos);
+973-    int t_tiles  = (seq_len + CHUNK - 1) / CHUNK;
+974-    bool lane_predicate = cute::elect_one_sync();
+975-
+976-        // --- Load initial state
+977-#ifndef TMA_DISABLE_ALL
+978:    if constexpr (HasStateIn && !StateFP32) {
+979-        using FP32StateSmemLayout =
+980-            typename Layouts::FP32StateSmemLayout;
+981-
+982-        using TMAFP32StateSmemLayout =
+983-            typename Layouts::TMAFP32StateSmemLayout;
+984-
+985-        bool use_correction_state = false;
+986-
+987-        if constexpr (DirectMixedInitial) {
+988-            use_correction_state =
+989-                (seq_idx == 3 || seq_idx == 7);
+990-        }
+991-
+992-        if (use_correction_state) {
+--
+1049-                            make_shape(
+1050-                                Int<1>{},
+1051-                                Int<D>{},
+1052-                                Int<D>{}
+1053-                            ),
+1054-                            stride(g_corr.layout())
+1055-                        )
+1056-                    );
+1057-
+1058-                Tensor s_fp32 =
+1059-                    make_tensor(
+1060-                        make_smem_ptr(
+1061-                            reinterpret_cast<float*>(
+1062-                                shared_storage
+1063:                                    .state_fp32_buf
+1064-                            )
+1065-                        ),
+1066-                        TMAFP32StateSmemLayout{}
+1067-                    );
+1068-
+1069-                auto cta_tma_load_state =
+1070-                    tma_load_correction_state
+1071-                        .get_slice(Int<0>{});
+1072-
+1073-                cute::copy(
+1074-                    tma_load_correction_state.with(
+1075-                        reinterpret_cast<
+1076-                            BarrierType&
+1077-                        >(
+--
+1084-                    cta_tma_load_state
+1085-                        .partition_D(s_fp32)
+1086-                );
+1087-            }
+1088-
+1089-            __syncthreads();
+1090-
+1091-            shared_storage
+1092-                .state_acc_tma_barrier
+1093-                .wait(0);
+1094-
+1095-            cutlass::arch::
+1096-                fence_view_async_shared();
+1097-
+1098:            smem_cvt_fp32_to_bf16<
+1099-                FP32StateSmemLayout,
+1100-                StateSmemLayout,
+1101-                D,
+1102-                NumThreads
+1103-            >(
+1104-                reinterpret_cast<float*>(
+1105:                    shared_storage.state_fp32_buf
+1106-                ),
+1107-                shared_storage.state_acc.begin(),
+1108-                threadIdx.x
+1109-            );
+1110-
+1111-            __syncthreads();
+1112-
+1113-        } else {
+1114-            // Normal BF16 resident-state load.
+1115-            //
+1116-            // In M11 direct mode raw states are compact:
+1117-            //   cp0 -> raw0
+1118-            //   cp1 -> raw1
+1119-            //   cp2 -> raw2
+--
+1217-                        .partition_D(s_state)
+1218-                );
+1219-            }
+1220-
+1221-            __syncthreads();
+1222-
+1223-            shared_storage
+1224-                .state_acc_tma_barrier
+1225-                .wait(0);
+1226-
+1227-            cutlass::arch::
+1228-                fence_view_async_shared();
+1229-        }
+1230-
+1231:    } else if constexpr (HasStateIn && StateFP32) {
+1232-        // Existing generic FP32 state path.
+1233-        using FP32StateSmemLayout =
+1234-            typename Layouts::FP32StateSmemLayout;
+1235-        using TMAFP32StateSmemLayout =
+1236-            typename Layouts::TMAFP32StateSmemLayout;
+1237-
+1238-        if (
+1239-            warp_role == WarpRole::LOAD_QKG &&
+1240-            lane_predicate
+1241-        ) {
+1242-            using BarrierType =
+1243-                cutlass::arch::
+1244-                    ClusterTransactionBarrier::ValueType;
+1245-
+--
+1285-                        make_shape(
+1286-                            Int<1>{},
+1287-                            Int<D>{},
+1288-                            Int<D>{}
+1289-                        ),
+1290-                        stride(g_init.layout())
+1291-                    )
+1292-                );
+1293-
+1294-            Tensor s_fp32 =
+1295-                make_tensor(
+1296-                    make_smem_ptr(
+1297-                        reinterpret_cast<float*>(
+1298-                            shared_storage
+1299:                                .state_fp32_buf
+1300-                        )
+1301-                    ),
+1302-                    TMAFP32StateSmemLayout{}
+1303-                );
+1304-
+1305-            auto cta_tma_load_state =
+1306-                tma_load_initial_state
+1307-                    .get_slice(Int<0>{});
+1308-
+1309-            cute::copy(
+1310-                tma_load_initial_state.with(
+1311-                    reinterpret_cast<
+1312-                        BarrierType&
+1313-                    >(
+--
+1320-                cta_tma_load_state
+1321-                    .partition_D(s_fp32)
+1322-            );
+1323-        }
+1324-
+1325-        __syncthreads();
+1326-
+1327-        shared_storage
+1328-            .state_acc_tma_barrier
+1329-            .wait(0);
+1330-
+1331-        cutlass::arch::
+1332-            fence_view_async_shared();
+1333-
+1334:        smem_cvt_fp32_to_bf16<
+1335-            FP32StateSmemLayout,
+1336-            StateSmemLayout,
+1337-            D,
+1338-            NumThreads
+1339-        >(
+1340-            reinterpret_cast<float*>(
+1341:                shared_storage.state_fp32_buf
+1342-            ),
+1343-            shared_storage.state_acc.begin(),
+1344-            threadIdx.x
+1345-        );
+1346-
+1347-        __syncthreads();
+1348-
+1349-    } else {
+1350-        BF16* buf =
+1351-            shared_storage.state_acc.begin();
+1352-
+1353-        constexpr int kTotal =
+1354-            cute::cosize_v<StateSmemLayout>;
+1355-
+--
+2051-                Tensor s_out_tile = make_tensor(make_smem_ptr(out_stage_ptr), TMAVOLayout{});
+2052-                cute::copy(
+2053-                    tma_store_out,
+2054-                    cta_tma_store.partition_S(s_out_tile),
+2055-                    cta_tma_store.partition_D(g_out_tile)
+2056-                );
+2057-                tma_store_arrive();
+2058-            }
+2059-
+2060-            tma_store_wait<0>();
+2061-            store_pipeline.consumer_release(out_read);
+2062-            ++out_read;
+2063-        }
+2064-
+2065:	        if constexpr (HasStateOut && !StateFP32) {
+2066-            int final_seq_idx = seq_idx;
+2067-            bool write_final_state = true;
+2068-
+2069-            // M9-A diagnostic:
+2070-            // Mixed H96 CP-P2 has:
+2071-            // cp0 -> raw0
+2072-            // cp1 -> raw1
+2073-            // cp2 -> skip
+2074-            // cp3 -> raw2
+2075-            // cp4 -> raw3
+2076-            // cp5 -> raw4
+2077-            // cp6 -> skip
+2078-            // cp7 -> raw5
+2079-            if (final_state_N != N) {
+--
+2125-                auto cta_tma_store_state =
+2126-                    tma_store_final_state.get_slice(Int<0>{});
+2127-
+2128-                cute::copy(
+2129-                    tma_store_final_state,
+2130-                    cta_tma_store_state.partition_S(s_state),
+2131-                    cta_tma_store_state.partition_D(g_final_tile)
+2132-                );
+2133-
+2134-                tma_store_arrive();
+2135-            }
+2136-        }
+2137-    }
+2138-
+2139:    if constexpr (HasStateOut && StateFP32) {
+2140-        // FP32 state: all threads sync, convert bf16->fp32, then STORE warp does TMA
+2141-        using FP32StateSmemLayout = typename Layouts::FP32StateSmemLayout;
+2142-        using TMAFP32StateSmemLayout = typename Layouts::TMAFP32StateSmemLayout;
+2143-
+2144-        __syncthreads();  // all warps sync — pipeline smem now free
+2145-
+2146:        smem_cvt_bf16_to_fp32<StateSmemLayout, FP32StateSmemLayout, D, NumThreads>(
+2147-            shared_storage.state_acc.begin(),
+2148:            reinterpret_cast<float*>(shared_storage.state_fp32_buf),
+2149-            threadIdx.x);
+2150-        cutlass::arch::fence_view_async_shared();  // generic-proxy writes -> visible to async proxy (TMA)
+2151-        __syncthreads();  // conversion complete
+2152-
+2153-        if (warp_role == WarpRole::STORE && lane_predicate) {
+2154-            Tensor g_final = tma_store_final_state.get_tma_tensor(make_shape(N * H, D, D));
+2155-            auto state_off = g_final.layout()(seq_idx * H + head_idx, 0, 0);
+2156-            Tensor g_final_tile = make_tensor(g_final.data() + state_off,
+2157-                make_layout(make_shape(Int<1>{}, Int<D>{}, Int<D>{}), stride(g_final.layout())));
+2158-            Tensor s_fp32 = make_tensor(
+2159:                make_smem_ptr(reinterpret_cast<float*>(shared_storage.state_fp32_buf)),
+2160-                TMAFP32StateSmemLayout{});
+2161-
+2162-            auto cta_tma_store_state = tma_store_final_state.get_slice(Int<0>{});
+2163-            cute::copy(
+2164-                tma_store_final_state,
+2165-                cta_tma_store_state.partition_S(s_fp32),
+2166-                cta_tma_store_state.partition_D(g_final_tile)
+2167-            );
+2168-            tma_store_arrive();
+2169-        }
+2170-    }
+2171-
+2172-    __syncthreads();
+2173-#endif
+--
+2177-    class TmaLoadV,
+2178-    class TmaLoadBeta,
+2179-    class TmaLoadWsKD, class TmaLoadWsQD, class TmaLoadWsKR,
+2180-    class TmaLoadWsGT, class TmaLoadWsINV, class TmaLoadWsMqk,
+2181-    class TmaLoadState,
+2182-    class TmaStoreState,
+2183-    class TmaStoreOut,
+2184-    int CHUNK,
+2185-    int D,
+2186-    int InputStages,
+2187-    int OutputStages,
+2188-    int NumThreads,
+2189-    bool HasStateIn = true,
+2190-    bool HasStateOut = true,
+2191:    bool StateFP32 = false,
+2192-    bool IsVarlen = true
+2193->
+2194-__global__ void __launch_bounds__(NumThreads, 1) _flash_kda_fwd_recurrence(
+2195-    CUTE_GRID_CONSTANT TmaLoadV const tma_load_v,
+2196-    CUTE_GRID_CONSTANT TmaLoadBeta const tma_load_beta,
+2197-    CUTE_GRID_CONSTANT TmaLoadWsKD const tma_load_ws_kd,
+2198-    CUTE_GRID_CONSTANT TmaLoadWsQD const tma_load_ws_qd,
+2199-    CUTE_GRID_CONSTANT TmaLoadWsKR const tma_load_ws_kr,
+2200-    CUTE_GRID_CONSTANT TmaLoadWsGT const tma_load_ws_gt,
+2201-    CUTE_GRID_CONSTANT TmaLoadWsINV const tma_load_ws_inv,
+2202-    CUTE_GRID_CONSTANT TmaLoadWsMqk const tma_load_ws_mqk,
+2203-    CUTE_GRID_CONSTANT TmaLoadState const tma_load_initial_state,
+2204-    CUTE_GRID_CONSTANT TmaStoreState const tma_store_final_state,
+2205-    CUTE_GRID_CONSTANT TmaStoreOut const tma_store_out,
+--
+2291-            tile_base += (int(cu_seqlens[i + 1] - cu_seqlens[i]) + CHUNK - 1) / CHUNK;
+2292-        }
+2293-    } else {
+2294-        int T_seq = T_total / N;
+2295-        bos = seq_idx * T_seq;
+2296-        eos = bos + T_seq;
+2297-        tile_base = seq_idx * ((T_seq + CHUNK - 1) / CHUNK);
+2298-    }
+2299-    int seq_len  = int(eos - bos);
+2300-    int t_tiles  = (seq_len + CHUNK - 1) / CHUNK;
+2301-    bool lane_predicate = cute::elect_one_sync();
+2302-
+2303-    // --- Load initial state
+2304-#ifndef TMA_DISABLE_ALL
+2305:    if constexpr (HasStateIn && !StateFP32) {
+2306-        // BF16 state: TMA load directly into state_acc
+2307-        if (warp_role == WarpRole::LOAD_QKG && lane_predicate) {
+2308-            using BarrierType = cutlass::arch::ClusterTransactionBarrier::ValueType;
+2309-            constexpr uint32_t kStateTransactionBytes = cute::cosize_v<StateSmemLayout> * sizeof(BF16);
+2310-
+2311-            shared_storage.state_acc_tma_barrier.init(1);
+2312-            cutlass::arch::fence_barrier_init();  // generic init -> visible to async proxy (TMA complete-tx)
+2313-            shared_storage.state_acc_tma_barrier.arrive_and_expect_tx(kStateTransactionBytes);
+2314-
+2315-            Tensor g_init = tma_load_initial_state.get_tma_tensor(make_shape(N * H, D, D));
+2316-            auto init_off = g_init.layout()(seq_idx * H + head_idx, 0, 0);
+2317-            Tensor g_init_tile = make_tensor(g_init.data() + init_off,
+2318-                make_layout(make_shape(Int<1>{}, Int<D>{}, Int<D>{}), stride(g_init.layout())));
+2319-            Tensor s_state = make_tensor(make_smem_ptr(shared_storage.state_acc.begin()), TMAStateSmemLayout{});
+2320-
+2321-            auto cta_tma_load_state = tma_load_initial_state.get_slice(Int<0>{});
+2322-            cute::copy(
+2323-                tma_load_initial_state.with(reinterpret_cast<BarrierType&>(shared_storage.state_acc_tma_barrier)),
+2324-                cta_tma_load_state.partition_S(g_init_tile),
+2325-                cta_tma_load_state.partition_D(s_state)
+2326-            );
+2327-        }
+2328-        __syncthreads();
+2329-        shared_storage.state_acc_tma_barrier.wait(0);
+2330-        cutlass::arch::fence_view_async_shared();
+2331:    } else if constexpr (HasStateIn && StateFP32) {
+2332-        // FP32 state: TMA load fp32 into pipeline buffer, then convert to bf16 in state_acc
+2333-        using FP32StateSmemLayout = typename Layouts::FP32StateSmemLayout;
+2334-        using TMAFP32StateSmemLayout = typename Layouts::TMAFP32StateSmemLayout;
+2335-
+2336-        if (warp_role == WarpRole::LOAD_QKG && lane_predicate) {
+2337-            using BarrierType = cutlass::arch::ClusterTransactionBarrier::ValueType;
+2338-            constexpr uint32_t kFP32StateTransactionBytes = cute::cosize_v<StateSmemLayout> * sizeof(float);
+2339-
+2340-            shared_storage.state_acc_tma_barrier.init(1);
+2341-            cutlass::arch::fence_barrier_init();  // generic init -> visible to async proxy (TMA complete-tx)
+2342-            shared_storage.state_acc_tma_barrier.arrive_and_expect_tx(kFP32StateTransactionBytes);
+2343-
+2344-            Tensor g_init = tma_load_initial_state.get_tma_tensor(make_shape(N * H, D, D));
+2345-            auto init_off = g_init.layout()(seq_idx * H + head_idx, 0, 0);
+2346-            Tensor g_init_tile = make_tensor(g_init.data() + init_off,
+2347-                make_layout(make_shape(Int<1>{}, Int<D>{}, Int<D>{}), stride(g_init.layout())));
+2348-            Tensor s_fp32 = make_tensor(
+2349:                make_smem_ptr(reinterpret_cast<float*>(shared_storage.state_fp32_buf)),
+2350-                TMAFP32StateSmemLayout{});
+2351-
+2352-            auto cta_tma_load_state = tma_load_initial_state.get_slice(Int<0>{});
+2353-            cute::copy(
+2354-                tma_load_initial_state.with(reinterpret_cast<BarrierType&>(shared_storage.state_acc_tma_barrier)),
+2355-                cta_tma_load_state.partition_S(g_init_tile),
+2356-                cta_tma_load_state.partition_D(s_fp32)
+2357-            );
+2358-        }
+2359-        __syncthreads();
+2360-        shared_storage.state_acc_tma_barrier.wait(0);
+2361-        cutlass::arch::fence_view_async_shared();
+2362-
+2363-        // All threads: convert fp32 -> bf16 with layout transformation
+2364:        smem_cvt_fp32_to_bf16<FP32StateSmemLayout, StateSmemLayout, D, NumThreads>(
+2365:            reinterpret_cast<float*>(shared_storage.state_fp32_buf),
+2366-            shared_storage.state_acc.begin(),
+2367-            threadIdx.x);
+2368-        __syncthreads();
+2369-    } else {
+2370-        // No state in: zero-initialize state_acc
+2371-        {
+2372-            BF16* buf = shared_storage.state_acc.begin();
+2373-            constexpr int kTotal = cute::cosize_v<StateSmemLayout>;
+2374-            for (int i = threadIdx.x; i < kTotal; i += NumThreads) {
+2375-                buf[i] = BF16(0);
+2376-            }
+2377-        }
+2378-        // generic writes -> visible to async proxy (TMA state store covers t_tiles==0)
+2379-        cutlass::arch::fence_view_async_shared();
+--
+2830-                Tensor s_out_tile = make_tensor(make_smem_ptr(out_stage_ptr), TMAVOLayout{});
+2831-                cute::copy(
+2832-                    tma_store_out,
+2833-                    cta_tma_store.partition_S(s_out_tile),
+2834-                    cta_tma_store.partition_D(g_out_tile)
+2835-                );
+2836-                tma_store_arrive();
+2837-            }
+2838-
+2839-            tma_store_wait<0>();
+2840-            store_pipeline.consumer_release(out_read);
+2841-            ++out_read;
+2842-        }
+2843-
+2844:        if constexpr (HasStateOut && !StateFP32) {
+2845-            // BF16 state: TMA store directly from state_acc
+2846-            Tensor g_final = tma_store_final_state.get_tma_tensor(make_shape(N * H, D, D));
+2847-            auto state_off = g_final.layout()(seq_idx * H + head_idx, 0, 0);
+2848-            Tensor g_final_tile = make_tensor(g_final.data() + state_off,
+2849-                make_layout(make_shape(Int<1>{}, Int<D>{}, Int<D>{}), stride(g_final.layout())));
+2850-            Tensor s_state = make_tensor(make_smem_ptr(shared_storage.state_acc.begin()), TMAStateSmemLayout{});
+2851-
+2852-            auto cta_tma_store_state = tma_store_final_state.get_slice(Int<0>{});
+2853-            cute::copy(
+2854-                tma_store_final_state,
+2855-                cta_tma_store_state.partition_S(s_state),
+2856-                cta_tma_store_state.partition_D(g_final_tile)
+2857-            );
+2858-            tma_store_arrive();
+2859-        }
+2860-    }
+2861-
+2862:    if constexpr (HasStateOut && StateFP32) {
+2863-        // FP32 state: all threads sync, convert bf16->fp32, then STORE warp does TMA
+2864-        using FP32StateSmemLayout = typename Layouts::FP32StateSmemLayout;
+2865-        using TMAFP32StateSmemLayout = typename Layouts::TMAFP32StateSmemLayout;
+2866-
+2867-        __syncthreads();  // all warps sync — pipeline smem now free
+2868-
+2869:        smem_cvt_bf16_to_fp32<StateSmemLayout, FP32StateSmemLayout, D, NumThreads>(
+2870-            shared_storage.state_acc.begin(),
+2871:            reinterpret_cast<float*>(shared_storage.state_fp32_buf),
+2872-            threadIdx.x);
+2873-        cutlass::arch::fence_view_async_shared();  // generic-proxy writes -> visible to async proxy (TMA)
+2874-        __syncthreads();  // conversion complete
+2875-
+2876-        if (warp_role == WarpRole::STORE && lane_predicate) {
+2877-            Tensor g_final = tma_store_final_state.get_tma_tensor(make_shape(N * H, D, D));
+2878-            auto state_off = g_final.layout()(seq_idx * H + head_idx, 0, 0);
+2879-            Tensor g_final_tile = make_tensor(g_final.data() + state_off,
+2880-                make_layout(make_shape(Int<1>{}, Int<D>{}, Int<D>{}), stride(g_final.layout())));
+2881-            Tensor s_fp32 = make_tensor(
+2882:                make_smem_ptr(reinterpret_cast<float*>(shared_storage.state_fp32_buf)),
+2883-                TMAFP32StateSmemLayout{});
+2884-
+2885-            auto cta_tma_store_state = tma_store_final_state.get_slice(Int<0>{});
+2886-            cute::copy(
+2887-                tma_store_final_state,
+2888-                cta_tma_store_state.partition_S(s_fp32),
+2889-                cta_tma_store_state.partition_D(g_final_tile)
+2890-            );
+2891-            tma_store_arrive();
+2892-        }
+2893-    }
+2894-
+2895-    __syncthreads();
+2896-#endif

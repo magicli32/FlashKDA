@@ -1,0 +1,514 @@
+285-
+286-    auto tma_store_ws_kd  = make_tma_copy(SM90_TMA_STORE{}, m_ws_kd, TMAVOLayout{});
+287-    auto tma_store_ws_qd  = make_tma_copy(SM90_TMA_STORE{}, m_ws_qd, TMAVOLayout{});
+288-    auto tma_store_ws_kr  = make_tma_copy(SM90_TMA_STORE{}, m_ws_kr, TMAVOLayout{});
+289-    auto tma_store_ws_gt  = make_tma_copy(SM90_TMA_STORE{}, m_ws_gt, TMAGTotalSmemLayout{});
+290-    auto tma_store_ws_inv = make_tma_copy(SM90_TMA_STORE{}, m_ws_inv, TMALMLayout{});
+291-    auto tma_store_ws_mqk = make_tma_copy(SM90_TMA_STORE{}, m_ws_mqk, TMALMLayout{});
+292-
+293-    // --- TMA descriptors for Kernel 2 (loads: v,beta,workspace; load/store: state,out)
+294-    auto tma_load_v     = make_tma_copy(SM90_TMA_LOAD{}, m_v, TMAVOLayout{});
+295-    auto tma_load_beta2 = make_tma_copy(SM90_TMA_LOAD{}, m_beta, TMABetaSmemLayout{});
+296-
+297:    auto tma_load_ws_kd  = make_tma_copy(SM90_TMA_LOAD{}, m_ws_kd, TMAVOLayout{});
+298:    auto tma_load_ws_qd  = make_tma_copy(SM90_TMA_LOAD{}, m_ws_qd, TMAVOLayout{});
+299-    auto tma_load_ws_kr  = make_tma_copy(SM90_TMA_LOAD{}, m_ws_kr, TMAVOLayout{});
+300-    auto tma_load_ws_gt  = make_tma_copy(SM90_TMA_LOAD{}, m_ws_gt, TMAGTotalSmemLayout{});
+301-    auto tma_load_ws_inv = make_tma_copy(SM90_TMA_LOAD{}, m_ws_inv, TMALMLayout{});
+302-    auto tma_load_ws_mqk = make_tma_copy(SM90_TMA_LOAD{}, m_ws_mqk, TMALMLayout{});
+303-
+304-    auto tma_store_out = make_tma_copy(SM90_TMA_STORE{}, m_out, TMAVOLayout{});
+305-
+306-    // --- State TMA descriptors (conditional on HasStateIn/HasStateOut and StateFP32)
+307-    auto make_state_tma = [&]() {
+308-        if constexpr (StateFP32) {
+309-            // FP32 state TMA descriptors
+310-            auto m_initial_fp32 = make_tensor(
+--
+659-        !StateFP32 &&
+660-        !use_k1k2_overlap &&
+661-        T_total == 8192 &&
+662-        H == 96 &&
+663-        N == 8 &&
+664-        D == 128;
+665-
+666-    if (run_tmem_q_workspace_probe) {
+667-        flash_kda_sm103_tmem::
+668-            _flash_kda_tmem_q_workspace_mapping_probe
+669-            <<<N * H, 512, 0, stream>>>(
+670-                static_cast<void const*>(
+671:                    ws_raw.q_decayed
+672-                ),
+673-                total_tiles,
+674-                H
+675-            );
+676-    }
+677-
+678-
+679-    // U10-C:
+680-    // Validate real BF16 initial-state [K,V] loads,
+681-    // S^T register ownership and packed TMEM-A staging.
+682-    const char* tmem_real_state_probe_env =
+683-        std::getenv(
+--
+727-        initial_state_ptr != nullptr &&
+728-        T_total == 8192 &&
+729-        H == 96 &&
+730-        N == 8 &&
+731-        D == 128;
+732-
+733-    if (run_tmem_real_state_q_probe) {
+734-        flash_kda_sm103_tmem::
+735-            _flash_kda_tmem_real_state_q_product_probe
+736-            <<<N * H, 512, 0, stream>>>(
+737-                initial_state_ptr,
+738-                static_cast<void const*>(
+739:                    ws_raw.q_decayed
+740-                ),
+741-                total_tiles,
+742-                H
+743-            );
+744-    }
+745-
+746-
+747-    // U11-A:
+748-    // Launch a production-shaped 512-thread SM103 K2
+749-    // prototype for the first chunk only. Its temporary
+750-    // output is overwritten by the established K2 below.
+751-    const char* tmem_k2_first_chunk_env =
+--
+764-        initial_state_ptr != nullptr &&
+765-        T_total == 8192 &&
+766-        H == 96 &&
+767-        N == 8 &&
+768-        D == 128;
+769-
+770-    if (run_tmem_k2_first_chunk) {
+771-        flash_kda_sm103_tmem::
+772-            _flash_kda_tmem_k2_first_chunk
+773-            <<<N * H, 512, 0, stream>>>(
+774-                initial_state_ptr,
+775-                static_cast<void const*>(
+776:                    ws_raw.q_decayed
+777-                ),
+778-                out_ptr,
+779-                total_tiles,
+780-                H
+781-            );
+782-    }
+783-
+784-
+785-    // U11-B:
+786-    // Persistent one-CTA-per-(sequence,head) diagnostic.
+787-    // The initial state and TMEM allocation are reused while
+788-    // all 64 real q_decayed chunks are consumed serially.
+--
+802-        initial_state_ptr != nullptr &&
+803-        T_total == 8192 &&
+804-        H == 96 &&
+805-        N == 8 &&
+806-        D == 128;
+807-
+808-    if (run_tmem_k2_64chunk) {
+809-        flash_kda_sm103_tmem::
+810-            _flash_kda_tmem_k2_64chunk_skeleton<true>
+811-            <<<N * H, 512, 0, stream>>>(
+812-                initial_state_ptr,
+813-                static_cast<void const*>(
+814:                    ws_raw.q_decayed
+815-                ),
+816-                out_ptr,
+817-                total_tiles,
+818-                H
+819-            );
+820-    }
+821-
+822-
+823-    // U11-C:
+824-    // Execute the same persistent 64-chunk state-q chain,
+825-    // but compile out all TMEM drains, BF16 conversions and
+826-    // output stores. This isolates load + MMA + synchronization.
+--
+840-        initial_state_ptr != nullptr &&
+841-        T_total == 8192 &&
+842-        H == 96 &&
+843-        N == 8 &&
+844-        D == 128;
+845-
+846-    if (run_tmem_k2_no_drain) {
+847-        flash_kda_sm103_tmem::
+848-            _flash_kda_tmem_k2_64chunk_skeleton<false>
+849-            <<<N * H, 512, 0, stream>>>(
+850-                initial_state_ptr,
+851-                static_cast<void const*>(
+852:                    ws_raw.q_decayed
+853-                ),
+854-                out_ptr,
+855-                total_tiles,
+856-                H
+857-            );
+858-    }
+859-
+860-
+861-    // U11-D:
+862-    // Load the first real q_decayed tile once, then reuse it
+863-    // for all 64 no-drain MMA phases. The number of MMA,
+864-    // mbarrier waits and block barriers remains unchanged.
+--
+881-        N == 8 &&
+882-        D == 128;
+883-
+884-    if (run_tmem_k2_fixed_q) {
+885-        flash_kda_sm103_tmem::
+886-            _flash_kda_tmem_k2_64chunk_skeleton<
+887-                false,
+888-                false
+889-            >
+890-            <<<N * H, 512, 0, stream>>>(
+891-                initial_state_ptr,
+892-                static_cast<void const*>(
+893:                    ws_raw.q_decayed
+894-                ),
+895-                out_ptr,
+896-                total_tiles,
+897-                H
+898-            );
+899-    }
+900-
+901-
+902-    // U11-E:
+903-    // Double-buffer real q_decayed workspace tiles with
+904-    // asynchronous G2S bulk copies. This diagnostic keeps
+905-    // recurrent state fixed and compiles output drain out.
+--
+919-        initial_state_ptr != nullptr &&
+920-        T_total == 8192 &&
+921-        H == 96 &&
+922-        N == 8 &&
+923-        D == 128;
+924-
+925-    if (run_tmem_k2_q_pipeline) {
+926-        flash_kda_sm103_tmem::
+927-            _flash_kda_tmem_k2_q_pipeline<false>
+928-            <<<N * H, 512, 0, stream>>>(
+929-                initial_state_ptr,
+930-                static_cast<void const*>(
+931:                    ws_raw.q_decayed
+932-                ),
+933-                out_ptr,
+934-                total_tiles,
+935-                H
+936-            );
+937-    }
+938-
+939-
+940-    // U11-F:
+941-    // Same asynchronous two-stage q pipeline as U11-E,
+942-    // with TMEM drain, FP32->BF16 conversion and temporary
+943-    // output stores enabled. Production K2 overwrites output.
+--
+957-        initial_state_ptr != nullptr &&
+958-        T_total == 8192 &&
+959-        H == 96 &&
+960-        N == 8 &&
+961-        D == 128;
+962-
+963-    if (run_tmem_k2_q_pipeline_drain) {
+964-        flash_kda_sm103_tmem::
+965-            _flash_kda_tmem_k2_q_pipeline<true>
+966-            <<<N * H, 512, 0, stream>>>(
+967-                initial_state_ptr,
+968-                static_cast<void const*>(
+969:                    ws_raw.q_decayed
+970-                ),
+971-                out_ptr,
+972-                total_tiles,
+973-                H
+974-            );
+975-    }
+976-
+977-
+978-    // U11-G:
+979-    // Only the single TCGen issue thread waits for the
+980-    // current q stage. The pre-MMA CTA-wide barrier is
+981-    // compiled out; the post-drain barrier remains.
+--
+998-        N == 8 &&
+999-        D == 128;
+1000-
+1001-    if (run_tmem_k2_single_q_consumer) {
+1002-        flash_kda_sm103_tmem::
+1003-            _flash_kda_tmem_k2_q_pipeline<
+1004-                true,
+1005-                true
+1006-            >
+1007-            <<<N * H, 512, 0, stream>>>(
+1008-                initial_state_ptr,
+1009-                static_cast<void const*>(
+1010:                    ws_raw.q_decayed
+1011-                ),
+1012-                out_ptr,
+1013-                total_tiles,
+1014-                H
+1015-            );
+1016-    }
+1017-
+1018-
+1019-    // U11-H:
+1020-    // Build on U11-G, but only the four drain warps wait
+1021-    // for MMA completion and execute TCGen thread-sync
+1022-    // fences. All 16 warps retain the post-drain barrier.
+--
+1040-        D == 128;
+1041-
+1042-    if (run_tmem_k2_drain_consumers) {
+1043-        flash_kda_sm103_tmem::
+1044-            _flash_kda_tmem_k2_q_pipeline<
+1045-                true,
+1046-                true,
+1047-                true
+1048-            >
+1049-            <<<N * H, 512, 0, stream>>>(
+1050-                initial_state_ptr,
+1051-                static_cast<void const*>(
+1052:                    ws_raw.q_decayed
+1053-                ),
+1054-                out_ptr,
+1055-                total_tiles,
+1056-                H
+1057-            );
+1058-    }
+1059-
+1060-    // ===== Launch Kernel 2 (recurrence) =====
+1061-#if BLOCK_LEVEL_K2 >= 0
+1062-    {
+1063-        constexpr int kK2Threads = 32 * 2 + 128;
+1064-        using SharedStorageK2T = SharedStorageK2<K2L, kInputStages, kOutputStages>;
+1065-        int smem_size_k2 = sizeof(SharedStorageK2T);
+1066-
+1067-        auto kernel2 = [&]() {
+1068-            if constexpr (StateFP32) {
+1069-                // FP32 keeps the P1/P0-L codegen path.
+1070-                return _flash_kda_fwd_recurrence<
+1071-                    decltype(tma_load_v), decltype(tma_load_beta2),
+1072:                    decltype(tma_load_ws_kd), decltype(tma_load_ws_qd), decltype(tma_load_ws_kr),
+1073-                    decltype(tma_load_ws_gt), decltype(tma_load_ws_inv), decltype(tma_load_ws_mqk),
+1074-                    decltype(tma_load_initial_state),
+1075-                    decltype(tma_store_final_state),
+1076-                    decltype(tma_store_out),
+1077-                    CHUNK, D, kInputStages, kOutputStages, kK2Threads,
+1078-                    HasStateIn, HasStateOut, StateFP32, IsVarlen
+1079-                >;
+1080-		            } else if constexpr (HasStateIn && HasStateOut) {
+1081-                // Stateful BF16:
+1082-                // keep the P2 register-resident recurrent-state winner.
+1083-                if (use_direct_initial) {
+1084-                    return _flash_kda_fwd_recurrence_bf16<
+1085-                        decltype(tma_load_v), decltype(tma_load_beta2),
+1086:                        decltype(tma_load_ws_kd), decltype(tma_load_ws_qd), decltype(tma_load_ws_kr),
+1087-                        decltype(tma_load_ws_gt), decltype(tma_load_ws_inv), decltype(tma_load_ws_mqk),
+1088-                        decltype(tma_load_initial_state),
+1089-                        decltype(tma_load_correction_state),
+1090-                        decltype(tma_store_final_state),
+1091-                        decltype(tma_store_out),
+1092-                        CHUNK, D, kInputStages, kOutputStages, kK2Threads,
+1093-                        HasStateIn, HasStateOut, StateFP32, IsVarlen,
+1094-                        true
+1095-                    >;
+1096-                }
+1097-
+1098-                return _flash_kda_fwd_recurrence_bf16<
+1099-                    decltype(tma_load_v), decltype(tma_load_beta2),
+1100:                    decltype(tma_load_ws_kd), decltype(tma_load_ws_qd), decltype(tma_load_ws_kr),
+1101-                    decltype(tma_load_ws_gt), decltype(tma_load_ws_inv), decltype(tma_load_ws_mqk),
+1102-                    decltype(tma_load_initial_state),
+1103-                    decltype(tma_load_correction_state),
+1104-                    decltype(tma_store_final_state),
+1105-                    decltype(tma_store_out),
+1106-                    CHUNK, D, kInputStages, kOutputStages, kK2Threads,
+1107-                    HasStateIn, HasStateOut, StateFP32, IsVarlen,
+1108-                    false
+1109-                >;
+1110-            } else {
+1111-                // No-state / one-sided BF16:
+1112-                // use the P1 shared-state maxnreg(120) kernel.
+1113-                return _flash_kda_fwd_recurrence_bf16_shared<
+1114-                    decltype(tma_load_v), decltype(tma_load_beta2),
+1115:                    decltype(tma_load_ws_kd), decltype(tma_load_ws_qd), decltype(tma_load_ws_kr),
+1116-                    decltype(tma_load_ws_gt), decltype(tma_load_ws_inv), decltype(tma_load_ws_mqk),
+1117-                    decltype(tma_load_initial_state),
+1118-                    decltype(tma_store_final_state),
+1119-                    decltype(tma_store_out),
+1120-                    CHUNK, D, kInputStages, kOutputStages, kK2Threads,
+1121-                    HasStateIn, HasStateOut, StateFP32, IsVarlen
+1122-                >;
+1123-            }
+1124-        }();
+1125-
+1126-        cudaFuncSetAttribute(kernel2, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size_k2);
+1127-
+--
+1132-            !StateFP32 &&
+1133-            HasStateIn &&
+1134-            HasStateOut
+1135-        ) {
+1136-            kernel2<<<
+1137-                grid_k2,
+1138-                block_k2,
+1139-                smem_size_k2,
+1140-                k2_stream
+1141-            >>>(
+1142-                tma_load_v,
+1143-                tma_load_beta2,
+1144:                tma_load_ws_kd,
+1145:                tma_load_ws_qd,
+1146-                tma_load_ws_kr,
+1147-                tma_load_ws_gt,
+1148-                tma_load_ws_inv,
+1149-                tma_load_ws_mqk,
+1150-                tma_load_initial_state,
+1151-                tma_load_correction_state,
+1152-                tma_store_final_state,
+1153-                tma_store_out,
+1154-                out_ptr,
+1155-                T_total,
+1156-                H,
+1157-                N,
+--
+1161-                ready_protocol_ptr,
+1162-                ws_raw
+1163-            );
+1164-        } else {
+1165-            kernel2<<<
+1166-                grid_k2,
+1167-                block_k2,
+1168-                smem_size_k2,
+1169-                k2_stream
+1170-            >>>(
+1171-                tma_load_v,
+1172-                tma_load_beta2,
+1173:                tma_load_ws_kd,
+1174:                tma_load_ws_qd,
+1175-                tma_load_ws_kr,
+1176-                tma_load_ws_gt,
+1177-                tma_load_ws_inv,
+1178-                tma_load_ws_mqk,
+1179-                tma_load_initial_state,
+1180-                tma_store_final_state,
+1181-                tma_store_out,
+1182-                out_ptr,
+1183-                T_total,
+1184-                H,
+1185-                N,
+1186-                final_state_N,
+--
+1266-    auto ws_lm_gmem_layout = make_layout(make_shape(int(n_ht), CHUNK, CHUNK), LayoutRight{});
+1267-
+1268-    Tensor m_ws_kd  = make_tensor(make_gmem_ptr(ws_kd), ws_kd_gmem_layout);
+1269-    Tensor m_ws_kr  = make_tensor(make_gmem_ptr(ws_kr), ws_kr_gmem_layout);
+1270-    Tensor m_ws_gt  = make_tensor(make_gmem_ptr(ws_gt), ws_gt_gmem_layout);
+1271-    Tensor m_ws_inv = make_tensor(make_gmem_ptr(ws_inv), ws_lm_gmem_layout);
+1272-
+1273-    Tensor m_final = make_tensor(make_gmem_ptr(final_state_ptr), state_gmem_layout);
+1274-
+1275-    // TMA descriptors
+1276-    auto tma_load_v     = make_tma_copy(SM90_TMA_LOAD{}, m_v, TMAVOLayout{});
+1277-    auto tma_load_beta  = make_tma_copy(SM90_TMA_LOAD{}, m_beta, TMABetaSmemLayout{});
+1278:    auto tma_load_ws_kd = make_tma_copy(SM90_TMA_LOAD{}, m_ws_kd, TMAVOLayout{});
+1279-    auto tma_load_ws_kr = make_tma_copy(SM90_TMA_LOAD{}, m_ws_kr, TMAVOLayout{});
+1280-    auto tma_load_ws_gt = make_tma_copy(SM90_TMA_LOAD{}, m_ws_gt, TMAGTotalSmemLayout{});
+1281-    auto tma_load_ws_inv = make_tma_copy(SM90_TMA_LOAD{}, m_ws_inv, TMALMLayout{});
+1282-    auto tma_store_state = make_tma_copy(SM90_TMA_STORE{}, m_final, TMAFP32StateSmemLayout{});
+1283-
+1284-    // Launch state_only kernel
+1285-    constexpr int kThreads = 32 + 128;  // 4 MMA warps + 1 LOAD warp (no STORE warp)
+1286-    using SharedStorageSOT = SharedStorageStateOnly<SOL, kInputStages>;
+1287-    int smem_size = sizeof(SharedStorageSOT);
+1288-
+1289-    auto kernel = _flash_kda_state_only<
+1290-        decltype(tma_load_v), decltype(tma_load_beta),
+1291:        decltype(tma_load_ws_kd), decltype(tma_load_ws_kr),
+1292-        decltype(tma_load_ws_gt), decltype(tma_load_ws_inv),
+1293-        decltype(tma_store_state),
+1294-        CHUNK, D, kInputStages, kThreads
+1295-    >;
+1296-
+1297-    cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size);
+1298-
+1299-    // M7-B1 diagnostic:
+1300-    // For the target Mixed H96 CP-P2 case, only CP segments 2 and 6
+1301-    // are source segments for a split boundary.
+1302-    int launch_N = N;
+1303-    if (T_total == 8192 && H == 96 && N == 8) {
+1304-        launch_N = 2;
+1305-    }
+1306-
+1307-    dim3 grid(launch_N, H);
+1308-    dim3 block(kThreads);
+1309-
+1310-    kernel<<<grid, block, smem_size, stream>>>(
+1311-        tma_load_v, tma_load_beta,
+1312:        tma_load_ws_kd, tma_load_ws_kr,
+1313-        tma_load_ws_gt, tma_load_ws_inv,
+1314-	ws_kd, ws_kr, ws_gt, ws_inv,
+1315-        tma_store_state,
+1316-        T_total, H, N, cu_seqlens_ptr, total_tiles,
+1317-        num_warmup_chunks_ptr
+1318-    );
+1319-}
+1320-
+1321-// Explicit instantiation for launch_state_only
+1322-template void launch_state_only<128>(
+1323-    cutlass::bfloat16_t const*, cutlass::bfloat16_t const*,
+1324-    void*, float*, int, int, int, int,
+--
+1372-    auto ws_gt_gmem_layout = make_layout(make_shape(int(n_ht), D), LayoutRight{});
+1373-    auto ws_lm_gmem_layout = make_layout(make_shape(int(n_ht), CHUNK, CHUNK), LayoutRight{});
+1374-
+1375-    Tensor m_ws_kd  = make_tensor(make_gmem_ptr(ws_kd), ws_kd_gmem_layout);
+1376-    Tensor m_ws_kr  = make_tensor(make_gmem_ptr(ws_kr), ws_kr_gmem_layout);
+1377-    Tensor m_ws_gt  = make_tensor(make_gmem_ptr(ws_gt), ws_gt_gmem_layout);
+1378-    Tensor m_ws_inv = make_tensor(make_gmem_ptr(ws_inv), ws_lm_gmem_layout);
+1379-
+1380-    Tensor m_mt = make_tensor(make_gmem_ptr(mt_ptr), state_gmem_layout);
+1381-
+1382-    auto tma_load_v     = make_tma_copy(SM90_TMA_LOAD{}, m_v, TMAVOLayout{});
+1383-    auto tma_load_beta  = make_tma_copy(SM90_TMA_LOAD{}, m_beta, TMABetaSmemLayout{});
+1384:    auto tma_load_ws_kd = make_tma_copy(SM90_TMA_LOAD{}, m_ws_kd, TMAVOLayout{});
+1385-    auto tma_load_ws_kr = make_tma_copy(SM90_TMA_LOAD{}, m_ws_kr, TMAVOLayout{});
+1386-    auto tma_load_ws_gt = make_tma_copy(SM90_TMA_LOAD{}, m_ws_gt, TMAGTotalSmemLayout{});
+1387-    auto tma_load_ws_inv = make_tma_copy(SM90_TMA_LOAD{}, m_ws_inv, TMALMLayout{});
+1388-    auto tma_store_mt = make_tma_copy(SM90_TMA_STORE{}, m_mt, TMAFP32StateSmemLayout{});
+1389-
+1390-    constexpr int kThreads = 32 + 128;
+1391-    using SharedStorageSOT = SharedStorageStateOnly<SOL, kInputStages>;
+1392-    int smem_size = sizeof(SharedStorageSOT);
+1393-
+1394-    auto kernel = _flash_kda_state_only<
+1395-        decltype(tma_load_v), decltype(tma_load_beta),
+1396:        decltype(tma_load_ws_kd), decltype(tma_load_ws_kr),
+1397-        decltype(tma_load_ws_gt), decltype(tma_load_ws_inv),
+1398-        decltype(tma_store_mt),
+1399-        CHUNK, D, kInputStages, kThreads, true  // CalcMt=true
+1400-    >;
+1401-
+1402-    cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size);
+1403-
+1404-    dim3 grid(N, H);
+1405-    dim3 block(kThreads);
+1406-
+1407-    kernel<<<grid, block, smem_size, stream>>>(
+1408-        tma_load_v, tma_load_beta,
+1409:        tma_load_ws_kd, tma_load_ws_kr,
+1410-        tma_load_ws_gt, tma_load_ws_inv,
+1411-	ws_kd, ws_kr, ws_gt, ws_inv,
+1412-        tma_store_mt,
+1413-        T_total, H, N, cu_seqlens_ptr, total_tiles,
+1414-        num_warmup_chunks_ptr
+1415-    );
+1416-}
+1417-
+1418-// Explicit instantiation for launch_mt_only
+1419-template void launch_mt_only<128>(
+1420-    cutlass::bfloat16_t const*, cutlass::bfloat16_t const*,
+1421-    void*, float*, int, int, int, int,

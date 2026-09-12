@@ -1,0 +1,45 @@
+        sp.b.kdT[kc][tokS] = kdv[j];
+        const float uv = sU[tok][K + kc];
+        const bf16 uh = __float2bfloat16(uv);
+        sp.b.u0Th[kc][tokS] = uh;
+        sp.b.u0Tl[kc][tokS] = __float2bfloat16(uv - __bfloat162float(uh));
+      }
+    }
+    ptx::tcgen05_fence_before_thread_sync();
+    __syncthreads();
+    const uint32_t taddr = s_taddr;
+    const uint32_t idw = ptx::mma_inst_desc_dense<ptx::MmaDenseKind::F16>(
+        128, 128, ptx::F16Type::BF16, ptx::F16Type::BF16, ptx::DType::F32, ptx::Major::K, ptx::Major::K);
+    // TMA-fed pTt is the [tok][kc] P image: B is MN-major (idesc bit 16)
+    const uint32_t idwm = ptx::mma_inst_desc_dense<ptx::MmaDenseKind::F16>(
+        128, 128, ptx::F16Type::BF16, ptx::F16Type::BF16, ptx::DType::F32, ptx::Major::K, ptx::Major::MN);
+    const uint32_t tp = (sub & 1) ? 256u : 0u;  // this chunk's pair
+    // pTt TMA landed. ALL threads consume the phase: skipping an open
+    // phase would alias the next parity wait against the previous completed
+    ptx::mbar_wait_parity(&mb_f, mbph & 1);
+    ++mbph;
+    if (tid == 0) {
+      ptx::tcgen05_fence_after_thread_sync();
+      // W-D at tp+[0,128): -W[kc_out][kc_in] = kdecT @ P via MN-major B
+#pragma unroll
+      for (int k16 = 0; k16 < BT / 16; ++k16) {
+        const uint64_t da = ptx::mma_smem_desc_k_major<uint16_t, 64, 128>(ptx::to_shared(&sp.b.kdT[0][0]) + k16 * 32);
+        const uint64_t db =
+            ptx::mma_smem_desc_mn_major<uint16_t, 64, 128, 128>(ptx::to_shared(&sp.b.pTt[0][0]) + k16 * 2048);
+        ptx::tcgen05_mma_f16(taddr + tp, da, db, idwm, k16 ? 1u : 0u);
+      }
+      // w0^T-D at tp+[128,256): w0^T[vc][kc_out] = u0T @ kdT^T (hi + lo
+      // A) — this slot IS crun's seed / c-fold addend
+      for (int half = 0; half < 2; ++half)
+#pragma unroll
+        for (int k16 = 0; k16 < BT / 16; ++k16) {
+          const uint64_t da = ptx::mma_smem_desc_k_major<uint16_t, 64, 128>(
+              ptx::to_shared(half ? &sp.b.u0Tl[0][0] : &sp.b.u0Th[0][0]) + k16 * 32);
+          const uint64_t db = ptx::mma_smem_desc_k_major<uint16_t, 64, 128>(ptx::to_shared(&sp.b.kdT[0][0]) + k16 * 32);
+          ptx::tcgen05_mma_f16(taddr + tp + 128u, da, db, idw, (half | k16) ? 1u : 0u);
+        }
+      ptx::tcgen05_commit_arrive(&mb_f);
+    }
+    if constexpr (GM != 0)  // next chunk's RAW gates landed long ago (P1
+      // cp.async): transform them here, under the W/w0 mma wait, off the
+      // serial cumsum path. Each thread rewrites exactly the bytes it

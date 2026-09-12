@@ -1,0 +1,215 @@
+  1384	// ---------------- K2: tcgen05 chain (A-from-TMEM, B via TMA) --------------
+  1385	// Per-piece CTA walks its chunks serially. State S^T lives in registers —
+  1386	// thread (band = (warp&3)*32, ch = warp>>2) owns S^T[vc = band+lane][kc in
+  1387	// ch*32 + 0..31] — and is re-staged per chunk as a packed SINGLE-bf16 TMEM
+  1388	// A region (precision study: the bf16 B operands, not the S read, set the error
+  1389	// floor — hi/lo S buys <= 1.27x in the kernel ctx). Products (A-from-TMEM,
+  1390	// B = TMA 128B-swizzled K-major tiles):
+  1391	//   P1: U^T[vc,tok]  = S^T @ Pneg^T   (M=128 N=64  K=128; +u0 in drain)
+  1392	//   P2: S^T[vc,kc]  += U^T @ kdecT^T  (M=128 N=128 K=64;  decay in drain)
+  1393	// o is fused: P3 (o^T += S^T@qdec^T) rides phase 1; P4 (o^T += u^T@Aqk^T)
+  1394	// rides phase 2. TMEM cols: [0,64) P1-D | [64,192) P2-D | [192,224) A2hi |
+  1395	// [224,256) A2lo | [256,320) A1 | [384,448) o-D.
+  1396	// SELF-START: the piece's start state composes from h0 through the prefix
+  1397	// pieces' (L, c) maps as a NO-DRAIN tf32 TMEM chain, gated on pflags.
+  1398	template <bool VL = false>  // varlen: pad-row masks compile-time-gated
+  1414	    float* __restrict__ Sf,
+  1415	    // per-chunk states (nullptr = off): row = GLOBAL chunk c, [c][h][K][V] or
+  1416	    // [c][h][V][K] (hpc_v_first), fp32 or bf16 (hpc_bf16)
+  1420	    const CUtensorMap* sl_map,  // fp32 piece L maps
+  1421	    const CUtensorMap* sc_map,  // fp32 piece offsets
+  1422	    const float* __restrict__ h0s,
+  1423	    const uint32_t* __restrict__ pflags = nullptr,  // fused: piece-done
+  1424	    // varlen (defaults = eqlen): sg/nseg/n_chunks are SEQUENCE-local; cbase/
+  1425	    // pbase are the sequence's global chunk/piece bases; o rows live at
+  1426	    // c*BT + tokoff + tok and rows >= tend are pad (masked, never stored)
+  1433	  const int band = (warp & 3) * 32, ch = warp >> 2;  // 16 warps: ch = quarter
+  1441	  auto& mb_tma = S.mb_tma;
+  1442	  auto& mb_p1 = S.mb_p1;
+  1443	  auto& mb_p2 = S.mb_p2;
+  1444	  auto& mb_o = S.mb_o;
+  1445	  auto& s_taddr = S.s_taddr;
+  1447	    ptx::mbar_init(&mb_tma, 1);
+  1448	    ptx::mbar_init(&mb_p1, 1);  // spine: P1 only
+  1449	    ptx::mbar_init(&mb_p2, 1);  // spine: P2 only
+  1450	    ptx::mbar_init(&mb_o, 2);   // o-pipe: P3 + P4
+  1451	    ptx::mbar_init(&S.mb_pre, 1);
+  1452	    ptx::mbar_init(&S.mb_preC, 1);
+  1453	    ptx::mbar_init(&S.mb_cmL, 1);
+  1454	    ptx::mbar_init(&S.mb_cmC, 1);
+  1458	  if (warp == 0) ptx::tcgen05_alloc(ptx::to_shared(&s_taddr), 512);
+  1460	  const uint32_t taddr = s_taddr;
+  1462	  // ascending piece boundaries (shared with the builders)
+  1465	  const int tse = VL ? tend : n_chunks * BT;  // sequence end token
+  1467	  // SELF-START: compose this piece's start from h0 through pieces
+  1468	  // 0..sg-1 as a NO-DRAIN tf32 TMEM chain (the fp32 D region IS the
+  1469	  // next A operand — identity (m,k)->(lane,col) map, same-thread D->A
+  1470	  // ordered without commit+wait). Per piece, two K=8-sliced mma
+  1471	  // batches: D_tgt = D_src @ L^T then D_tgt += I @ c^T — the c add
+  1472	  // rides the mma pipe (a tcgen05.st into a region in-flight mmas
+  1473	  // read is UNordered). L is stored bf16 (half its TMA bytes): it
+  1474	  // lands as two SWZ128 tiles in the TOP half of its 64 KB fp32 slot
+  1475	  // and all threads widen it in place to the SWZ32 fp32 tiles the
+  1476	  // tf32 descs read (widen_map_tf32); c stays fp32 SWZ32 TMA (bf16 c
+  1477	  // failed the 16K o gate). Both slots overlay the chunk-loop tiles
+  1478	  // (exactly 128 KB); slot reuse is gated by per-batch commits WAITED
+  1479	  // one piece late (mb_cmL/mb_cmC), so TMA overlaps the in-flight
+  1480	  // mmas. ONE drain at the end. TMEM: Da [0,128) | Db [128,256) |
+  1481	  // I [256,384) — all reused by the chunk loop only after the final
+  1482	  // drain.
+  1484	  for (int j = 0; j < 32; ++j)
+  1485	    Sreg[j] = h0s[((size_t)h * K + (ch * 32 + j)) * K + vc];
+  1492	    for (int c4 = 0; c4 < 32; c4 += 4) {  // I diag + h0 fp32, no pack
+  1495	      for (int e = 0; e < 4; ++e) {
+  1499	      ptx::tcgen05_st_32x32b_x4(taddr + lane_hi + uint32_t(256 + ch * 32 + c4), iv[0], iv[1], iv[2], iv[3]);
+  1500	      ptx::tcgen05_st_32x32b_x4(taddr + lane_hi + uint32_t(ch * 32 + c4), sv[0], sv[1], sv[2], sv[3]);
+  1502	    ptx::tcgen05_wait_st();
+  1503	    ptx::tcgen05_fence_before_thread_sync();
+  1505	    const uint32_t idt = ptx::mma_inst_desc_tf32(128, K);
+  1506	    for (int q2 = 0; q2 < sg; ++q2) {
+  1508	        if (pflags)  // fused grid: trail piece q2's producer
+  1511	        if (q2) ptx::mbar_wait_parity(&S.mb_cmL, (q2 - 1) & 1);
+  1512	        ptx::mbar_arrive_expect_tx(&S.mb_pre, K * K * 2);
+  1513	        ptx::cp_async_bulk_tensor_2d_load(ptx::to_shared(pL), sl_map, 0, ((pbase + q2) * H + h) * K, &S.mb_pre);
+  1515	            ptx::to_shared(pL) + uint32_t(K * 64 * 2), sl_map, 64, ((pbase + q2) * H + h) * K, &S.mb_pre);
+  1516	        if (q2) ptx::mbar_wait_parity(&S.mb_cmC, (q2 - 1) & 1);
+  1517	        ptx::mbar_arrive_expect_tx(&S.mb_preC, K * K * 4);
+  1518	        for (int s = 0; s < 16; ++s)
+  1520	              ptx::to_shared(bC) + uint32_t(s * 4096), sc_map, 8 * s, ((pbase + q2) * H + h) * K, &S.mb_preC);
+  1522	      // L landed: widen (its slot writes are safe — piece q2-1's mmas
+  1523	      // retired before tid0 issued this TMA, and the widen is ordered
+  1524	      // after the TMA through mb_pre)
+  1525	      ptx::mbar_wait_parity(&S.mb_pre, q2 & 1);
+  1527	      ptx::tcgen05_fence_before_thread_sync();
+  1530	        ptx::tcgen05_fence_after_thread_sync();
+  1532	        for (int s = 0; s < 16; ++s)
+  1533	          mma_tf32_atmem(
+  1534	              taddr + tgt,
+  1535	              taddr + src + uint32_t(8 * s),
+  1536	              ptx::mma_smem_desc_k_major<uint32_t, 8, 32>(ptx::to_shared(bL) + uint32_t(s * 4096)),
+  1539	        ptx::tcgen05_commit_arrive(&S.mb_cmL);
+  1540	        ptx::mbar_wait_parity(&S.mb_preC, q2 & 1);  // c: direct fp32
+  1541	        for (int s = 0; s < 16; ++s)
+  1542	          mma_tf32_atmem(
+  1543	              taddr + tgt,
+  1544	              taddr + uint32_t(256 + 8 * s),
+  1545	              ptx::mma_smem_desc_k_major<uint32_t, 8, 32>(ptx::to_shared(bC) + uint32_t(s * 4096)),
+  1548	        ptx::tcgen05_commit_arrive(&S.mb_cmC);
+  1551	    if (tid == 0)  // last commit
+  1552	      ptx::mbar_wait_parity(&S.mb_cmC, (sg - 1) & 1);
+  1554	    ptx::tcgen05_fence_after_thread_sync();
+  1555	    const uint32_t fin = ((sg - 1) & 1) ? 0u : 128u;  // last tgt region
+  1557	    for (int b2 = 0; b2 < 4; ++b2) {
+  1559	      ptx::tcgen05_ld_32x32b_x8(
+  1560	          taddr + lane_hi + fin + uint32_t(ch * 32 + b2 * 8), r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]);
+  1561	      ptx::tcgen05_wait_ld();
+  1563	      for (int j = 0; j < 8; ++j)
+  1564	        Sreg[b2 * 8 + j] = __int_as_float(r[j]);  // c folded in-pipe
+  1567	  }  // sg > 0
+  1568	  // packed cvt.bf16x2 (per-half rn == the scalar pair; low half = e0)
+  1575	  if (pflags) {  // fused grid: own piece's factors must be complete
+  1581	  auto tma_issue = [&](int cc) {
+  1583	    ptx::mbar_arrive_expect_tx(&mb_tma, 6 * 64 * 64 * 2 + 128 * 64 * 2 + BT * K * 4);
+  1584	    ptx::cp_async_bulk_tensor_2d_load(ptx::to_shared(&sPneg[bu2][0][0][0]), &pneg_map, 0, (cc * H + h) * BT, &mb_tma);
+  1585	    ptx::cp_async_bulk_tensor_2d_load(ptx::to_shared(&sPneg[bu2][1][0][0]), &pneg_map, 64, (cc * H + h) * BT, &mb_tma);
+  1586	    ptx::cp_async_bulk_tensor_2d_load(ptx::to_shared(&sKdT[bu2][0][0]), &kdt_map, 0, (cc * H + h) * K, &mb_tma);
+  1587	    ptx::cp_async_bulk_tensor_2d_load(ptx::to_shared(&sQd[bu2][0][0][0]), &qd_map, 0, (cc * H + h) * BT, &mb_tma);
+  1588	    ptx::cp_async_bulk_tensor_2d_load(ptx::to_shared(&sQd[bu2][1][0][0]), &qd_map, 64, (cc * H + h) * BT, &mb_tma);
+  1589	    ptx::cp_async_bulk_tensor_2d_load(ptx::to_shared(&sAh[bu2][0][0]), &aqh_map, 0, (cc * H + h) * BT, &mb_tma);
+  1590	    ptx::cp_async_bulk_tensor_2d_load(ptx::to_shared(&sAl[bu2][0][0]), &aql_map, 0, (cc * H + h) * BT, &mb_tma);
+  1591	    ptx::cp_async_bulk_tensor_2d_load(ptx::to_shared(&sU0[bu2][0][0]), &u0f_map, 0, (cc * H + h) * BT, &mb_tma);
+  1593	  if (tid == 0 && (!VL || per_seg > 0)) tma_issue(c0);
+  1594	  // running gC chunk pointer (chunks are H*K apart — same addresses,
+  1595	  // minus the per-chunk 64-bit rebuild; C4 census diet) + loop-invariant
+  1596	  // A1 tmem column
+  1598	  const uint32_t a1st = taddr + lane_hi + (256u + ch * 16);
+  1599	  for (int c = c0; c < c0 + per_seg; ++c) {
+  1601	    // prefetch this chunk's gC early: its latency hides behind A1
+  1602	    // staging + P1 (u0 rides the chunk TMA into sU0 instead)
+  1605	    for (int j = 0; j < 8; ++j)
+  1608	    // stage A1 = S^T packed single-bf16 (o's S-term reads it too, via
+  1609	    // P3); no lo pack/st — vet b8 (vet_tf32_step.py): S-read precision
+  1610	    // is not the error floor, worst kernel-ctx cell 1.27x of hi/lo
+  1614	      for (int w = 0; w < 16; ++w) {
+  1618	      ptx::tcgen05_st_32x32b_x16(a1st, hw);
+  1620	    // h[c]: the register state BEFORE this chunk (store-only; the last
+  1621	    // boundary is final_state's). Dense — every row written; a per-sequence
+  1622	    // snapshot-index filter would gate this store (sparse follow-up).
+  1625	      if (hpc_v_first) {  // [V,K]: kc contiguous, one run per thread
+  1630	          for (int j = 0; j < 16; ++j)
+  1635	          for (int j = 0; j < 8; ++j)
+  1638	      } else {  // [K,V]: vc contiguous, coalesced across the warp
+  1643	          for (int j = 0; j < 32; ++j)
+  1648	          for (int j = 0; j < 32; ++j)
+  1653	    ptx::tcgen05_wait_st();
+  1654	    ptx::tcgen05_fence_before_thread_sync();
+  1656	    // ALL threads gate on the chunk TMA: the sU0 reads in the U drain
+  1657	    // below need the cross-proxy visibility this mbarrier's completion
+  1658	    // gives its waiters (non-issuer threads previously just idled into
+  1659	    // the mb_p1 wait from here, so no overlap is lost)
+  1660	    ptx::mbar_wait_parity(&mb_tma, (c - c0) & 1);
+  1661	    if (tid == 0 || tid == 32) {  // dual issuers, disjoint D regions
+  1662	      // phase closed: arm the next chunk into the other buffer
+  1663	      if (tid == 0 && c + 1 < c0 + per_seg) tma_issue(c + 1);
+  1664	      ptx::tcgen05_fence_after_thread_sync();
+  1665	      const uint32_t idesc1 = ptx::mma_inst_desc_dense<ptx::MmaDenseKind::F16>(
+  1669	        for (int k16 = 0; k16 < 8; ++k16) {
+  1670	          const uint64_t db = ptx::mma_smem_desc_k_major<uint16_t, 64, 128>(
+  1672	          ptx::tcgen05_mma_f16_atmem(taddr, taddr + (256u + k16 * 8), db, idesc1, k16 ? 1u : 0u);
+  1674	        ptx::tcgen05_commit_arrive(&mb_p1);
+  1677	        for (int k16 = 0; k16 < 8; ++k16) {  // P3: o^T = S^T@qdec^T
+  1678	          const uint64_t db = ptx::mma_smem_desc_k_major<uint16_t, 64, 128>(
+  1680	          ptx::tcgen05_mma_f16_atmem(taddr + 384u, taddr + (256u + k16 * 8), db, idesc1, k16 ? 1u : 0u);
+  1682	        ptx::tcgen05_commit_arrive(&mb_o);
+  1685	    ptx::mbar_wait_parity(&mb_p1, (c - c0) & 1);  // U-drain: P1 alone
+  1686	    ptx::tcgen05_fence_after_thread_sync();
+  1687	    // drain U^T (+u0), pack A2 (one x16 ld: one TMEM
+  1688	    // round-trip for the 16 columns instead of two x8 trips)
+  1693	        ptx::tcgen05_ld_32x32b_x16(
+  1694	            taddr + lane_hi + uint32_t(ch * 16),
+  1711	        ptx::tcgen05_wait_ld();
+  1713	        for (int j = 0; j < 16; ++j)
+  1718	      for (int w = 0; w < 8; ++w)
+  1720	      ptx::tcgen05_st_32x32b_x8(
+  1721	          taddr + lane_hi + (192u + ch * 8), hw[0], hw[1], hw[2], hw[3], hw[4], hw[5], hw[6], hw[7]);
+  1722	      ptx::tcgen05_st_32x32b_x8(
+  1723	          taddr + lane_hi + (224u + ch * 8), lw[0], lw[1], lw[2], lw[3], lw[4], lw[5], lw[6], lw[7]);
+  1725	    ptx::tcgen05_wait_st();
+  1726	    ptx::tcgen05_fence_before_thread_sync();
+  1729	      ptx::tcgen05_fence_after_thread_sync();
+  1731	        const uint32_t idesc2 = ptx::mma_inst_desc_dense<ptx::MmaDenseKind::F16>(
+  1733	        for (int half = 0; half < 2; ++half)
+  1735	          for (int k16 = 0; k16 < 4; ++k16) {
+  1737	                ptx::mma_smem_desc_k_major<uint16_t, 64, 128>(ptx::to_shared(&sKdT[buf_idx][0][0]) + k16 * 32);
+  1738	            ptx::tcgen05_mma_f16_atmem(
+  1739	                taddr + 64u, taddr + (192u + half * 32 + k16 * 8), db, idesc2, (half | k16) ? 1u : 0u);
+  1741	        ptx::tcgen05_commit_arrive(&mb_p2);
+  1743	        const uint32_t idesc4 = ptx::mma_inst_desc_dense<ptx::MmaDenseKind::F16>(
+  1745	        // P4: o^T += u^T@Aqk^T (u-hi x A-hi, u-hi x A-lo, u-lo x A-hi)
+  1746	        for (int pr = 0; pr < 3; ++pr) {
+  1750	          for (int k16 = 0; k16 < 4; ++k16) {
+  1751	            const uint64_t db = ptx::mma_smem_desc_k_major<uint16_t, 64, 128>(ptx::to_shared(ab) + k16 * 32);
+  1752	            ptx::tcgen05_mma_f16_atmem(taddr + 384u, taddr + (acol + k16 * 8), db, idesc4, 1u);
+  1755	        ptx::tcgen05_commit_arrive(&mb_o);
+  1758	    ptx::mbar_wait_parity(&mb_p2, (c - c0) & 1);  // S-drain: P2 alone
+  1759	    ptx::tcgen05_fence_after_thread_sync();
+  1760	    // drain P2: S = e^{gC} o S + tmem (gv prefetched at chunk top;
+  1761	    // one x32 ld = the widest single-instruction drain)
+  1764	      ptx::tcgen05_ld_32x32b_x32(taddr + lane_hi + uint32_t(64 + ch * 32), r);
+  1765	      ptx::tcgen05_wait_ld();
+  1767	      for (int jj = 0; jj < 32; ++jj)
+  1770	    // o-pipe drain (P3+P4) rides behind the S update, off the spine
+  1771	    ptx::mbar_wait_parity(&mb_o, (c - c0) & 1);
+  1772	    ptx::tcgen05_fence_after_thread_sync();
+  1775	      ptx::tcgen05_ld_32x32b_x16(
+  1776	          taddr + lane_hi + uint32_t(384 + ch * 16),
+  1793	      ptx::tcgen05_wait_ld();
+  1794	      // running row pointer (rows are H*K apart — same addresses,
+  1795	      // minus the per-element 64-bit row*H*K rebuild)
+  1800	      for (int j = 0; j < 16; ++j, op += orow)
+  1801	        if (!VL || row0 + j < tse)  // pad rows: the NEXT seq's
+  1808	    for (int j = 0; j < 32; ++j)
+  1809	      Sf[((size_t)h * K + ch * 32 + j) * K + vc] = Sreg[j];
+  1811	  if (warp == 0) ptx::tcgen05_dealloc(taddr, 512);
+  1812	  ptx::tcgen05_relinquish();
+  1814	// eqlen NP == 1 fallback: whole chain from h0, no piece maps/flags (the

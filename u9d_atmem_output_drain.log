@@ -1,0 +1,43 @@
+    ptx::mbar_wait_parity(&mb_p1, (c - c0) & 1);  // U-drain: P1 alone
+    ptx::tcgen05_fence_after_thread_sync();
+    // drain U^T (+u0), pack A2 (one x16 ld: one TMEM
+    // round-trip for the 16 columns instead of two x8 trips)
+    {
+      alignas(16) float Ur[16];
+      {
+        uint32_t r[16];
+        ptx::tcgen05_ld_32x32b_x16(
+            taddr + lane_hi + uint32_t(ch * 16),
+            r[0],
+            r[1],
+            r[2],
+            r[3],
+            r[4],
+            r[5],
+            r[6],
+            r[7],
+            r[8],
+            r[9],
+            r[10],
+            r[11],
+            r[12],
+            r[13],
+            r[14],
+            r[15]);
+        ptx::tcgen05_wait_ld();
+#pragma unroll
+        for (int j = 0; j < 16; ++j)
+          Ur[j] = __int_as_float(r[j]) + sU0[buf_idx][ch * 16 + j][vc];
+      }
+      uint32_t hw[8], lw[8];
+#pragma unroll
+      for (int w = 0; w < 8; ++w)
+        pack2(Ur[2 * w], Ur[2 * w + 1], hw[w], lw[w]);
+      ptx::tcgen05_st_32x32b_x8(
+          taddr + lane_hi + (192u + ch * 8), hw[0], hw[1], hw[2], hw[3], hw[4], hw[5], hw[6], hw[7]);
+      ptx::tcgen05_st_32x32b_x8(
+          taddr + lane_hi + (224u + ch * 8), lw[0], lw[1], lw[2], lw[3], lw[4], lw[5], lw[6], lw[7]);
+    }
+    ptx::tcgen05_wait_st();
+    ptx::tcgen05_fence_before_thread_sync();
+    __syncthreads();

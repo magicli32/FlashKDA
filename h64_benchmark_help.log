@@ -1,0 +1,11 @@
+usage: bench_fwd.py [-h] [--warmup WARMUP] [--iters ITERS] [--repeats REPEATS]
+                    [--mode {fixed,varlen,all}] [--H H] [--D D]
+
+options:
+  -h, --help            show this help message and exit
+  --warmup WARMUP
+  --iters ITERS
+  --repeats REPEATS
+  --mode {fixed,varlen,all}
+  --H H
+  --D D

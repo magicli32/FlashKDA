@@ -1,0 +1,251 @@
+                N == 8 &&
+                T_total == 8192 &&
+                H == 96 &&
+                D == 128;
+        }
+
+        auto kernel1 = _flash_kda_fwd_prepare<
+            decltype(tma_load_q), decltype(tma_load_k),
+            decltype(tma_load_beta),
+            decltype(tma_load_g), decltype(tma_load_dt_bias),
+            decltype(tma_store_ws_kd), decltype(tma_store_ws_qd), decltype(tma_store_ws_kr),
+            decltype(tma_store_ws_gt), decltype(tma_store_ws_inv), decltype(tma_store_ws_mqk),
+            CHUNK, D, kK1Threads, IsVarlen
+        >;
+
+        if constexpr (IsVarlen) {
+            if (use_uniform_h96_k1_fast) {
+                kernel1 = _flash_kda_fwd_prepare<
+                    decltype(tma_load_q), decltype(tma_load_k),
+                    decltype(tma_load_beta),
+                    decltype(tma_load_g), decltype(tma_load_dt_bias),
+                    decltype(tma_store_ws_kd), decltype(tma_store_ws_qd), decltype(tma_store_ws_kr),
+                    decltype(tma_store_ws_gt), decltype(tma_store_ws_inv), decltype(tma_store_ws_mqk),
+                    CHUNK, D, kK1Threads, true, false, true
+                >;
+            }
+        }
+
+        cudaFuncSetAttribute(
+            kernel1,
+            cudaFuncAttributeMaxDynamicSharedMemorySize,
+            smem_size_k1_launch
+        );
+
+        if constexpr (IsVarlen) {
+            if (!use_uniform_h96_k1_fast) {
+                _flash_kda_build_tile_prefix<<<1, 32, 0, stream>>>(
+                    cu_seqlens_ptr, N, CHUNK, ws_tile_prefix);
+            }
+        }
+
+        int k1_tiles = total_tiles;
+
+        if (use_uniform_h96_k1_fast) {
+            int T_seq = T_total / N;
+            int tiles_per_seq =
+                (T_seq + CHUNK - 1) / CHUNK;
+            k1_tiles = N * tiles_per_seq;
+        }
+
+        dim3 grid_k1 = use_k1k2_overlap
+            ? dim3(k1_tiles * H, 1, 1)
+            : dim3(k1_tiles, H, 1);
+
+        dim3 block_k1(kK1Threads);
+
+        kernel1<<<grid_k1, block_k1, smem_size_k1_launch, k1_stream>>>(
+            tma_load_q, tma_load_k, tma_load_beta,
+            tma_load_g, tma_load_dt_bias,
+            tma_store_ws_kd, tma_store_ws_qd, tma_store_ws_kr,
+            tma_store_ws_gt, tma_store_ws_inv, tma_store_ws_mqk,
+            scale, T_total, H, N, cu_seqlens_ptr, total_tiles,
+            A_log_ptr, gate_scale, ws_tile_prefix, nullptr, ws_ready, ws_raw
+        );
+
+        if (use_k1k2_overlap) {
+            cudaEventRecord(
+                producer_done_event,
+                k1_stream
+            );
+        }
+    }
+#endif
+
+    // ===== Launch Kernel 2 (recurrence) =====
+#if BLOCK_LEVEL_K2 >= 0
+    {
+        constexpr int kK2Threads = 32 * 2 + 128;
+        using SharedStorageK2T = SharedStorageK2<K2L, kInputStages, kOutputStages>;
+        int smem_size_k2 = sizeof(SharedStorageK2T);
+
+        auto kernel2 = [&]() {
+            if constexpr (StateFP32) {
+                // FP32 keeps the P1/P0-L codegen path.
+                return _flash_kda_fwd_recurrence<
+                    decltype(tma_load_v), decltype(tma_load_beta2),
+                    decltype(tma_load_ws_kd), decltype(tma_load_ws_qd), decltype(tma_load_ws_kr),
+                    decltype(tma_load_ws_gt), decltype(tma_load_ws_inv), decltype(tma_load_ws_mqk),
+                    decltype(tma_load_initial_state),
+                    decltype(tma_store_final_state),
+                    decltype(tma_store_out),
+                    CHUNK, D, kInputStages, kOutputStages, kK2Threads,
+                    HasStateIn, HasStateOut, StateFP32, IsVarlen
+                >;
+		            } else if constexpr (HasStateIn && HasStateOut) {
+                // Stateful BF16:
+                // keep the P2 register-resident recurrent-state winner.
+                if (use_direct_initial) {
+                    return _flash_kda_fwd_recurrence_bf16<
+                        decltype(tma_load_v), decltype(tma_load_beta2),
+                        decltype(tma_load_ws_kd), decltype(tma_load_ws_qd), decltype(tma_load_ws_kr),
+                        decltype(tma_load_ws_gt), decltype(tma_load_ws_inv), decltype(tma_load_ws_mqk),
+                        decltype(tma_load_initial_state),
+                        decltype(tma_load_correction_state),
+                        decltype(tma_store_final_state),
+                        decltype(tma_store_out),
+                        CHUNK, D, kInputStages, kOutputStages, kK2Threads,
+                        HasStateIn, HasStateOut, StateFP32, IsVarlen,
+                        true
+                    >;
+                }
+
+                return _flash_kda_fwd_recurrence_bf16<
+                    decltype(tma_load_v), decltype(tma_load_beta2),
+                    decltype(tma_load_ws_kd), decltype(tma_load_ws_qd), decltype(tma_load_ws_kr),
+                    decltype(tma_load_ws_gt), decltype(tma_load_ws_inv), decltype(tma_load_ws_mqk),
+                    decltype(tma_load_initial_state),
+                    decltype(tma_load_correction_state),
+                    decltype(tma_store_final_state),
+                    decltype(tma_store_out),
+                    CHUNK, D, kInputStages, kOutputStages, kK2Threads,
+                    HasStateIn, HasStateOut, StateFP32, IsVarlen,
+                    false
+                >;
+            } else {
+                // No-state / one-sided BF16:
+                // use the P1 shared-state maxnreg(120) kernel.
+                return _flash_kda_fwd_recurrence_bf16_shared<
+                    decltype(tma_load_v), decltype(tma_load_beta2),
+                    decltype(tma_load_ws_kd), decltype(tma_load_ws_qd), decltype(tma_load_ws_kr),
+                    decltype(tma_load_ws_gt), decltype(tma_load_ws_inv), decltype(tma_load_ws_mqk),
+                    decltype(tma_load_initial_state),
+                    decltype(tma_store_final_state),
+                    decltype(tma_store_out),
+                    CHUNK, D, kInputStages, kOutputStages, kK2Threads,
+                    HasStateIn, HasStateOut, StateFP32, IsVarlen
+                >;
+            }
+        }();
+
+        cudaFuncSetAttribute(kernel2, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size_k2);
+
+        dim3 grid_k2(N, H);
+        dim3 block_k2(kK2Threads);
+
+        // U8-A diagnostic:
+        // Uniform H96 runs K1 and K2 serially on the caller stream.
+        // Passing nullptr removes the redundant per-tile readiness
+        // acquire and proxy fence from K2.
+        bool skip_uniform_h96_ready_wait = false;
+
+        if constexpr (IsVarlen) {
+            const char* skip_ready_env =
+                std::getenv(
+                    "FLASH_KDA_UNIFORM_H96_SKIP_READY_WAIT"
+                );
+
+            skip_uniform_h96_ready_wait =
+                skip_ready_env != nullptr &&
+                std::atoi(skip_ready_env) != 0 &&
+                !use_k1k2_overlap &&
+                N == 8 &&
+                T_total == 8192 &&
+                H == 96 &&
+                D == 128;
+        }
+
+        uint32_t* k2_ws_ready =
+            skip_uniform_h96_ready_wait
+                ? nullptr
+                : ws_ready;
+
+	        if constexpr (
+            !StateFP32 &&
+            HasStateIn &&
+            HasStateOut
+        ) {
+            kernel2<<<
+                grid_k2,
+                block_k2,
+                smem_size_k2,
+                k2_stream
+            >>>(
+                tma_load_v,
+                tma_load_beta2,
+                tma_load_ws_kd,
+                tma_load_ws_qd,
+                tma_load_ws_kr,
+                tma_load_ws_gt,
+                tma_load_ws_inv,
+                tma_load_ws_mqk,
+                tma_load_initial_state,
+                tma_load_correction_state,
+                tma_store_final_state,
+                tma_store_out,
+                out_ptr,
+                T_total,
+                H,
+                N,
+                final_state_N,
+                cu_seqlens_ptr,
+                total_tiles,
+                k2_ws_ready,
+                ws_raw
+            );
+        } else {
+            kernel2<<<
+                grid_k2,
+                block_k2,
+                smem_size_k2,
+                k2_stream
+            >>>(
+                tma_load_v,
+                tma_load_beta2,
+                tma_load_ws_kd,
+                tma_load_ws_qd,
+                tma_load_ws_kr,
+                tma_load_ws_gt,
+                tma_load_ws_inv,
+                tma_load_ws_mqk,
+                tma_load_initial_state,
+                tma_store_final_state,
+                tma_store_out,
+                out_ptr,
+                T_total,
+                H,
+                N,
+                final_state_N,
+                cu_seqlens_ptr,
+                total_tiles,
+                k2_ws_ready,
+                ws_raw
+            );
+        }
+
+        if (use_k1k2_overlap) {
+            cudaEventRecord(
+                consumer_done_event,
+                k2_stream
+            );
+
+            // Join the asynchronous DAG back to the caller stream.
+            // The benchmark's end event will therefore measure the
+            // complete K1/K2 pipeline, not just host launch latency.
+            cudaStreamWaitEvent(
+                stream,
+                consumer_done_event,
+                0
+            );
+
+            cudaStreamWaitEvent(

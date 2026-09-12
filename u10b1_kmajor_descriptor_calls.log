@@ -1,0 +1,188 @@
+csrc/smxx/tcgen05_sm103_probe.cuh-672-            );
+csrc/smxx/tcgen05_sm103_probe.cuh-673-
+csrc/smxx/tcgen05_sm103_probe.cuh-674-#pragma unroll
+csrc/smxx/tcgen05_sm103_probe.cuh-675-        for (int k16 = 0; k16 < 4; ++k16) {
+csrc/smxx/tcgen05_sm103_probe.cuh-676-            uint64_t descriptor_a =
+csrc/smxx/tcgen05_sm103_probe.cuh:677:                mma_smem_desc_k_major<
+csrc/smxx/tcgen05_sm103_probe.cuh-678-                    uint16_t,
+csrc/smxx/tcgen05_sm103_probe.cuh-679-                    64,
+csrc/smxx/tcgen05_sm103_probe.cuh-680-                    128
+csrc/smxx/tcgen05_sm103_probe.cuh-681-                >(
+csrc/smxx/tcgen05_sm103_probe.cuh-682-                    to_shared(
+csrc/smxx/tcgen05_sm103_probe.cuh-683-                        &shared.matrix_a[0][0]
+csrc/smxx/tcgen05_sm103_probe.cuh-684-                    ) + uint32_t(k16 * 32)
+csrc/smxx/tcgen05_sm103_probe.cuh-685-                );
+csrc/smxx/tcgen05_sm103_probe.cuh-686-
+csrc/smxx/tcgen05_sm103_probe.cuh-687-            uint64_t descriptor_b =
+csrc/smxx/tcgen05_sm103_probe.cuh:688:                mma_smem_desc_k_major<
+csrc/smxx/tcgen05_sm103_probe.cuh-689-                    uint16_t,
+csrc/smxx/tcgen05_sm103_probe.cuh-690-                    64,
+csrc/smxx/tcgen05_sm103_probe.cuh-691-                    128
+csrc/smxx/tcgen05_sm103_probe.cuh-692-                >(
+csrc/smxx/tcgen05_sm103_probe.cuh-693-                    to_shared(
+csrc/smxx/tcgen05_sm103_probe.cuh-694-                        &shared.matrix_b[0][0]
+csrc/smxx/tcgen05_sm103_probe.cuh-695-                    ) + uint32_t(k16 * 32)
+csrc/smxx/tcgen05_sm103_probe.cuh-696-                );
+--
+csrc/smxx/tcgen05_sm103_probe.cuh-885-                + uint32_t(
+csrc/smxx/tcgen05_sm103_probe.cuh-886-                    (k16 & 3) * 32
+csrc/smxx/tcgen05_sm103_probe.cuh-887-                );
+csrc/smxx/tcgen05_sm103_probe.cuh-888-
+csrc/smxx/tcgen05_sm103_probe.cuh-889-            uint64_t const desc_b =
+csrc/smxx/tcgen05_sm103_probe.cuh:890:                mma_smem_desc_k_major<
+csrc/smxx/tcgen05_sm103_probe.cuh-891-                    uint16_t,
+csrc/smxx/tcgen05_sm103_probe.cuh-892-                    64,
+csrc/smxx/tcgen05_sm103_probe.cuh-893-                    128
+csrc/smxx/tcgen05_sm103_probe.cuh-894-                >(matrix_b_addr);
+csrc/smxx/tcgen05_sm103_probe.cuh-895-
+csrc/smxx/tcgen05_sm103_probe.cuh-896-            tcgen05_mma_f16_atmem(
+csrc/smxx/tcgen05_sm103_probe.cuh-897-                taddr,
+csrc/smxx/tcgen05_sm103_probe.cuh-898-                taddr
+--
+csrc/smxx/tcgen05_sm103_probe.cuh-1124-                + uint32_t(
+csrc/smxx/tcgen05_sm103_probe.cuh-1125-                    (k16 & 3) * 32
+csrc/smxx/tcgen05_sm103_probe.cuh-1126-                );
+csrc/smxx/tcgen05_sm103_probe.cuh-1127-
+csrc/smxx/tcgen05_sm103_probe.cuh-1128-            uint64_t const desc_b =
+csrc/smxx/tcgen05_sm103_probe.cuh:1129:                mma_smem_desc_k_major<
+csrc/smxx/tcgen05_sm103_probe.cuh-1130-                    uint16_t,
+csrc/smxx/tcgen05_sm103_probe.cuh-1131-                    64,
+csrc/smxx/tcgen05_sm103_probe.cuh-1132-                    128
+csrc/smxx/tcgen05_sm103_probe.cuh-1133-                >(matrix_b_addr);
+csrc/smxx/tcgen05_sm103_probe.cuh-1134-
+csrc/smxx/tcgen05_sm103_probe.cuh-1135-            tcgen05_mma_f16_atmem(
+csrc/smxx/tcgen05_sm103_probe.cuh-1136-                taddr,
+csrc/smxx/tcgen05_sm103_probe.cuh-1137-                taddr
+--
+csrc/smxx/tcgen05_sm103_probe.cuh-1421-                + uint32_t(
+csrc/smxx/tcgen05_sm103_probe.cuh-1422-                    (k16 & 3) * 32
+csrc/smxx/tcgen05_sm103_probe.cuh-1423-                );
+csrc/smxx/tcgen05_sm103_probe.cuh-1424-
+csrc/smxx/tcgen05_sm103_probe.cuh-1425-            uint64_t const desc_b =
+csrc/smxx/tcgen05_sm103_probe.cuh:1426:                mma_smem_desc_k_major<
+csrc/smxx/tcgen05_sm103_probe.cuh-1427-                    uint16_t,
+csrc/smxx/tcgen05_sm103_probe.cuh-1428-                    16,
+csrc/smxx/tcgen05_sm103_probe.cuh-1429-                    128
+csrc/smxx/tcgen05_sm103_probe.cuh-1430-                >(matrix_b_addr);
+csrc/smxx/tcgen05_sm103_probe.cuh-1431-
+csrc/smxx/tcgen05_sm103_probe.cuh-1432-            tcgen05_mma_f16_atmem(
+csrc/smxx/tcgen05_sm103_probe.cuh-1433-                taddr,
+csrc/smxx/tcgen05_sm103_probe.cuh-1434-                taddr
+--
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1168-    if (tid == 0) {
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1169-      ptx::tcgen05_fence_after_thread_sync();
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1170-      // W-D at tp+[0,128): -W[kc_out][kc_in] = kdecT @ P via MN-major B
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1171-#pragma unroll
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1172-      for (int k16 = 0; k16 < BT / 16; ++k16) {
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu:1173:        const uint64_t da = ptx::mma_smem_desc_k_major<uint16_t, 64, 128>(ptx::to_shared(&sp.b.kdT[0][0]) + k16 * 32);
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1174-        const uint64_t db =
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1175-            ptx::mma_smem_desc_mn_major<uint16_t, 64, 128, 128>(ptx::to_shared(&sp.b.pTt[0][0]) + k16 * 2048);
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1176-        ptx::tcgen05_mma_f16(taddr + tp, da, db, idwm, k16 ? 1u : 0u);
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1177-      }
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1178-      // w0^T-D at tp+[128,256): w0^T[vc][kc_out] = u0T @ kdT^T (hi + lo
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1179-      // A) — this slot IS crun's seed / c-fold addend
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1180-      for (int half = 0; half < 2; ++half)
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1181-#pragma unroll
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1182-        for (int k16 = 0; k16 < BT / 16; ++k16) {
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu:1183:          const uint64_t da = ptx::mma_smem_desc_k_major<uint16_t, 64, 128>(
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1184-              ptx::to_shared(half ? &sp.b.u0Tl[0][0] : &sp.b.u0Th[0][0]) + k16 * 32);
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu:1185:          const uint64_t db = ptx::mma_smem_desc_k_major<uint16_t, 64, 128>(ptx::to_shared(&sp.b.kdT[0][0]) + k16 * 32);
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1186-          ptx::tcgen05_mma_f16(taddr + tp + 128u, da, db, idw, (half | k16) ? 1u : 0u);
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1187-        }
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1188-      ptx::tcgen05_commit_arrive(&mb_f);
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1189-    }
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1190-    if constexpr (GM != 0)  // next chunk's RAW gates landed long ago (P1
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1191-      // cp.async): transform them here, under the W/w0 mma wait, off the
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1192-      // serial cumsum path. Each thread rewrites exactly the bytes it
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1193-      // staged, so its own-group wait suffices; the next chunk's P2a
+--
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1294-#pragma unroll
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1295-            for (int s = 0; s < 16; ++s)
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1296-              mma_tf32_atmem(
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1297-                  taddr + tp + uint32_t(st2 * 128),
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1298-                  taddr + (sp2 + uint32_t(st2 * 128 + 8 * s)),
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu:1299:                  ptx::mma_smem_desc_k_major<uint32_t, 8, 32>(ptx::to_shared(&sp.g.sLt[s][0][0])),
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1300-                  idt,
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1301-                  (st2 | s) ? 1u : 0u);
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1302-          ptx::tcgen05_commit_arrive(&mb_f);
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1303-        }
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1304-        if (piece_end) {  // the piece's ONE remaining drain: final maps
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1305-          ptx::mbar_wait_parity(&mb_f, mbph & 1);
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1306-          ++mbph;
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1307-          ptx::tcgen05_fence_after_thread_sync();
+--
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1531-        const uint32_t src = (q2 & 1) ? 128u : 0u, tgt = 128u - src;
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1532-        for (int s = 0; s < 16; ++s)
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1533-          mma_tf32_atmem(
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1534-              taddr + tgt,
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1535-              taddr + src + uint32_t(8 * s),
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu:1536:              ptx::mma_smem_desc_k_major<uint32_t, 8, 32>(ptx::to_shared(bL) + uint32_t(s * 4096)),
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1537-              idt,
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1538-              s ? 1u : 0u);
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1539-        ptx::tcgen05_commit_arrive(&S.mb_cmL);
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1540-        ptx::mbar_wait_parity(&S.mb_preC, q2 & 1);  // c: direct fp32
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1541-        for (int s = 0; s < 16; ++s)
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1542-          mma_tf32_atmem(
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1543-              taddr + tgt,
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1544-              taddr + uint32_t(256 + 8 * s),
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu:1545:              ptx::mma_smem_desc_k_major<uint32_t, 8, 32>(ptx::to_shared(bC) + uint32_t(s * 4096)),
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1546-              idt,
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1547-              1u);
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1548-        ptx::tcgen05_commit_arrive(&S.mb_cmC);
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1549-      }
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1550-    }
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1551-    if (tid == 0)  // last commit
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1552-      ptx::mbar_wait_parity(&S.mb_cmC, (sg - 1) & 1);
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1553-    __syncthreads();
+--
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1665-      const uint32_t idesc1 = ptx::mma_inst_desc_dense<ptx::MmaDenseKind::F16>(
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1666-          128, 64, ptx::F16Type::BF16, ptx::F16Type::BF16, ptx::DType::F32, ptx::Major::K, ptx::Major::K);
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1667-      if (tid == 0) {
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1668-#pragma unroll
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1669-        for (int k16 = 0; k16 < 8; ++k16) {
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu:1670:          const uint64_t db = ptx::mma_smem_desc_k_major<uint16_t, 64, 128>(
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1671-              ptx::to_shared(&sPneg[buf_idx][k16 >> 2][0][0]) + (k16 & 3) * 32);
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1672-          ptx::tcgen05_mma_f16_atmem(taddr, taddr + (256u + k16 * 8), db, idesc1, k16 ? 1u : 0u);
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1673-        }
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1674-        ptx::tcgen05_commit_arrive(&mb_p1);
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1675-      } else {
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1676-#pragma unroll
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1677-        for (int k16 = 0; k16 < 8; ++k16) {  // P3: o^T = S^T@qdec^T
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu:1678:          const uint64_t db = ptx::mma_smem_desc_k_major<uint16_t, 64, 128>(
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1679-              ptx::to_shared(&sQd[buf_idx][k16 >> 2][0][0]) + (k16 & 3) * 32);
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1680-          ptx::tcgen05_mma_f16_atmem(taddr + 384u, taddr + (256u + k16 * 8), db, idesc1, k16 ? 1u : 0u);
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1681-        }
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1682-        ptx::tcgen05_commit_arrive(&mb_o);
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1683-      }
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1684-    }
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1685-    ptx::mbar_wait_parity(&mb_p1, (c - c0) & 1);  // U-drain: P1 alone
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1686-    ptx::tcgen05_fence_after_thread_sync();
+--
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1732-            128, 128, ptx::F16Type::BF16, ptx::F16Type::BF16, ptx::DType::F32, ptx::Major::K, ptx::Major::K);
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1733-        for (int half = 0; half < 2; ++half)
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1734-#pragma unroll
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1735-          for (int k16 = 0; k16 < 4; ++k16) {
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1736-            const uint64_t db =
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu:1737:                ptx::mma_smem_desc_k_major<uint16_t, 64, 128>(ptx::to_shared(&sKdT[buf_idx][0][0]) + k16 * 32);
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1738-            ptx::tcgen05_mma_f16_atmem(
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1739-                taddr + 64u, taddr + (192u + half * 32 + k16 * 8), db, idesc2, (half | k16) ? 1u : 0u);
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1740-          }
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1741-        ptx::tcgen05_commit_arrive(&mb_p2);
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1742-      } else {
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1743-        const uint32_t idesc4 = ptx::mma_inst_desc_dense<ptx::MmaDenseKind::F16>(
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1744-            128, 64, ptx::F16Type::BF16, ptx::F16Type::BF16, ptx::DType::F32, ptx::Major::K, ptx::Major::K);
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1745-        // P4: o^T += u^T@Aqk^T (u-hi x A-hi, u-hi x A-lo, u-lo x A-hi)
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1746-        for (int pr = 0; pr < 3; ++pr) {
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1747-          const uint32_t acol = pr == 2 ? 224u : 192u;
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1748-          const bf16* ab = pr == 1 ? &sAl[buf_idx][0][0] : &sAh[buf_idx][0][0];
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1749-#pragma unroll
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1750-          for (int k16 = 0; k16 < 4; ++k16) {
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu:1751:            const uint64_t db = ptx::mma_smem_desc_k_major<uint16_t, 64, 128>(ptx::to_shared(ab) + k16 * 32);
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1752-            ptx::tcgen05_mma_f16_atmem(taddr + 384u, taddr + (acol + k16 * 8), db, idesc4, 1u);
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1753-          }
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1754-        }
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1755-        ptx::tcgen05_commit_arrive(&mb_o);
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1756-      }
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1757-    }
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1758-    ptx::mbar_wait_parity(&mb_p2, (c - c0) & 1);  // S-drain: P2 alone
+/home/lcpu/88934705/lish/oss-kda-refs/sglang/python/sglang/kernels/jit/csrc/attention/kda_prefill.cu-1759-    ptx::tcgen05_fence_after_thread_sync();

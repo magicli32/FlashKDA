@@ -1,0 +1,520 @@
+44-#include <cstdint>
+45-#include <cuda.h>
+46-#include <cuda_bf16.h>
+47-#include <cuda_runtime.h>
+48-#include <map>
+49-#include <type_traits>
+50-#include <vector>
+51-
+52-// Inlined PTX helpers: only the subset the kernels below use, kept local so this
+53-// translation unit compiles standalone.
+54-namespace ptx {
+55-
+56-template <typename T>
+57-static __device__ __forceinline__ uint32_t to_shared(T* ptr) {
+58-  return static_cast<uint32_t>(__cvta_generic_to_shared(ptr));
+59-}
+60-
+61-// ---- mbarrier ----
+62-static __device__ __forceinline__ void mbar_init(uint64_t* bar, uint32_t count) {
+63-  asm volatile("mbarrier.init.shared.b64 [%0], %1;" ::"r"(to_shared(bar)), "r"(count));
+64-}
+65-static __device__ __forceinline__ void mbar_arrive_expect_tx(uint64_t* bar, uint32_t bytes) {
+66-  asm volatile("mbarrier.arrive.expect_tx.shared.b64 _, [%0], %1;" ::"r"(to_shared(bar)), "r"(bytes));
+67-}
+68:static __device__ __forceinline__ void mbar_wait_parity(uint64_t* bar, uint32_t parity) {
+69-  asm volatile(
+70-      "{\n\t.reg .pred p;\n\t"
+71-      "WAIT_%=: mbarrier.try_wait.parity.shared.b64 p, [%0], %1;\n\t"
+72-      "@!p bra WAIT_%=;\n\t}\n" ::"r"(to_shared(bar)),
+73-      "r"(parity));
+74-}
+75-
+76-// ---- cp.async (per-thread 16 B gmem->smem) ----
+77-static __device__ __forceinline__ void cp_async_16(void* smem, const void* gmem) {
+78-  asm volatile("cp.async.cg.shared.global [%0], [%1], 16;" ::"r"(to_shared(smem)), "l"(gmem));
+79-}
+80-// ignore-src predicate form: pad rows stage zeros branchlessly
+81-static __device__ __forceinline__ void cp_async_16_zfill(void* smem, const void* gmem, int ignore_src) {
+82-  asm volatile(
+83-      "{\n\t.reg .pred pz;\n\t"
+84-      "setp.ne.b32 pz, %2, 0;\n\t"
+85-      "cp.async.cg.shared.global [%0], [%1], 16, pz;\n\t}" ::"r"(to_shared(smem)),
+86-      "l"(gmem),
+87-      "r"(ignore_src));
+88-}
+89-static __device__ __forceinline__ void cp_async_commit() {
+90-  asm volatile("cp.async.commit_group;");
+91-}
+92-static __device__ __forceinline__ void cp_async_wait_pending(int pending) {
+--
+293-        "=r"(r[16]),
+294-        "=r"(r[17]),
+295-        "=r"(r[18]),
+296-        "=r"(r[19]),
+297-        "=r"(r[20]),
+298-        "=r"(r[21]),
+299-        "=r"(r[22]),
+300-        "=r"(r[23]),
+301-        "=r"(r[24]),
+302-        "=r"(r[25]),
+303-        "=r"(r[26]),
+304-        "=r"(r[27]),
+305-        "=r"(r[28]),
+306-        "=r"(r[29]),
+307-        "=r"(r[30]),
+308-        "=r"(r[31])
+309-      : "r"(taddr));
+310-}
+311-static __device__ __forceinline__ void tcgen05_wait_ld() {
+312-  asm volatile("tcgen05.wait::ld.sync.aligned;" ::: "memory");
+313-}
+314-static __device__ __forceinline__ void tcgen05_wait_st() {
+315-  asm volatile("tcgen05.wait::st.sync.aligned;" ::: "memory");
+316-}
+317:static __device__ __forceinline__ void tcgen05_commit_arrive(uint64_t* bar) {
+318-  asm volatile("tcgen05.commit.cta_group::1.mbarrier::arrive::one.b64 [%0];" ::"r"(to_shared(bar)));
+319-}
+320-static __device__ __forceinline__ void tcgen05_fence_before_thread_sync() {
+321-  asm volatile("tcgen05.fence::before_thread_sync;");
+322-}
+323-static __device__ __forceinline__ void tcgen05_fence_after_thread_sync() {
+324-  asm volatile("tcgen05.fence::after_thread_sync;");
+325-}
+326-static __device__ __forceinline__ void
+327-tcgen05_mma_f16(uint32_t d, uint64_t desc_a, uint64_t desc_b, uint32_t inst_desc_high, uint32_t scale_c) {
+328-  asm volatile(
+329-      "{\n\t.reg .pred p;\n\t"
+330-      "setp.ne.b32 p, %4, 0;\n\t"
+331-      "tcgen05.mma.cta_group::1.kind::f16 [%0], %1, %2, %3, p;\n\t}\n" ::"r"(d),
+332-      "l"(desc_a),
+333-      "l"(desc_b),
+334-      "r"(inst_desc_high),
+335-      "r"(scale_c));
+336-}
+337-// kind::f16 with the A operand sourced from TMEM (packed-bf16 hi/lo A)
+338-static __device__ __forceinline__ void
+339-tcgen05_mma_f16_atmem(uint32_t d, uint32_t a_tmem, uint64_t desc_b, uint32_t inst_desc_high, uint32_t scale_c) {
+340-  asm volatile(
+341-      "{\n\t.reg .pred p;\n\t"
+--
+473-// write). Callers: 512 threads; thread (vc, ch) owns row vc, cols
+474-// [ch*32, ch*32+32).
+475-static __device__ __forceinline__ void widen_map_tf32(float* slot, const bf16* pad, int vc, int ch) {
+476-  uint32_t w[16];
+477-#pragma unroll
+478-  for (int g = 0; g < 4; ++g) {  // one 16B SWZ128 atom per load
+479-    const int in0 = ch * 32 + g * 8;
+480-    reinterpret_cast<uint4*>(w)[g] =
+481-        *reinterpret_cast<const uint4*>(pad + (in0 >> 6) * (K * 64) + vc * 64 + ((((in0 >> 3) & 7) ^ (vc & 7)) << 3));
+482-  }
+483-  __syncthreads();
+484-#pragma unroll
+485-  for (int g = 0; g < 8; ++g) {  // 4-col groups: one 16B half-row each
+486-    const int in0 = ch * 32 + g * 4;
+487-    const float2 f0 = __bfloat1622float2(*reinterpret_cast<const __nv_bfloat162*>(&w[2 * g]));
+488-    const float2 f1 = __bfloat1622float2(*reinterpret_cast<const __nv_bfloat162*>(&w[2 * g + 1]));
+489-    const int half = ((in0 >> 2) & 1) ^ ((vc >> 2) & 1);
+490-    *reinterpret_cast<float4*>(slot + (in0 >> 3) * 1024 + vc * 8 + half * 4) = float4{f0.x, f0.y, f1.x, f1.y};
+491-  }
+492-}
+493-// Per-kernel smem structs: bodies take them BY REFERENCE so the fused
+494-// dispatcher can union them in one pool (nvcc SUMS per-function static variables).
+495-struct K1Smem {
+496-  bf16 sgb[2][BT][K];  // [chunk-pair slot]: c+1's bf16 gates stage via
+497:                       // cp.async during c's compute phases
+498-  float sgc[BT][K];    // P2a output: this chunk's fp32 gate cumsum
+499-  float sA[BT][BT];
+500-  float sU[BT][2 * K + 4];
+501-  float sb[BT];
+502-  union SPool {
+503-    struct {
+504-      bf16 kw[BT][K + 8];
+505-      bf16 qw[BT][K + 8];
+506-      bf16 kz[10][16][K + 8];
+507-    } a;
+508-    struct {
+509-      __align__(1024) bf16 kdT[K][64];
+510-      __align__(1024) bf16 pTt[K][64];
+511-      __align__(1024) bf16 u0Th[K][64];
+512-      __align__(1024) bf16 u0Tl[K][64];
+513-    } b;
+514-    struct {
+515-      __align__(1024) float sLt[16][128][8];
+516-    } g;  // compose B:
+517-          // fp32 L as SWZ32 k-major K=8 chunks (tf32 smem descs)
+518-    struct {
+519-      bf16 aC_h[BT][56];
+520-      bf16 aC_l[BT][56];  // A cols<48 hi/lo
+521-      bf16 upT_h[2 * K][56];
+--
+651-    // MN-major B source; every pieceL-passing caller supplies it — the
+652-    // NP == 1 k1_factors_mma launch runs pieceL == nullptr, no tail)
+653-    const CUtensorMap* ptm = nullptr) {
+654-  constexpr int SB = 16, NSB = BT / SB;  // 4 sub-blocks
+655-  const int tid = threadIdx.x;
+656-  const int warp = tid >> 5, lane = tid & 31;
+657-  auto& sA = S.sA;
+658-  auto& sU = S.sU;
+659-  auto& sb = S.sb;
+660-  auto& sp = S.sp;
+661-  auto& kw = sp.a.kw;
+662-  auto& qw = sp.a.qw;
+663-  auto& kz = sp.a.kz;
+664-  auto& mb_f = S.mb_f;
+665-  auto& s_taddr = S.s_taddr;
+666-  // RAW: the row reciprocal norms park in sU's dead pad columns (the rhs
+667-  // owns [0, 2K); 2K..2K+3 is the row-stride pad, written by nothing) — live
+668-  // from the norm pass to P2c at zero smem cost
+669-  auto rn2 = [&](int i) -> float2& { return *reinterpret_cast<float2*>(&sU[i][2 * K]); };
+670-  if (pieceL) {  // fused-tail tmem/mbar once (re-init of a live mbar is
+671-    // UB; re-alloc after relinquish faults)
+672-    if (tid == 0) ptx::mbar_init(&mb_f, 1);
+673-    if (warp == 0) ptx::tcgen05_alloc(ptx::to_shared(&s_taddr), 512);
+674-  }
+675:  int mbph = 0;       // mb_f phase counter (one wait per committed batch)
+676-  bool pend = false;  // tf32 compose committed, wait deferred a chunk
+677-  float bnext = 0.f;  // next chunk's beta (prefetched a chunk early)
+678-  // deferred compose wait: must land before ANY union write (the compose's
+679-  // B tiles overlay sp); by then the mmas long completed (~free)
+680-  auto pend_wait = [&] {
+681-    if (pend) {
+682:      ptx::mbar_wait_parity(&mb_f, mbph & 1);
+683:      ++mbph;
+684-      pend = false;
+685-    }
+686-  };
+687-  const int nc1 = VL ? nc_tot : T / BT;  // total chunks (varlen: sum nc_s)
+688-  const int tse = VL ? tend : T;         // sequence end token
+689-  // GM != 0 hoist: h is constant across a block's jobs (h-major runs)
+690-  const float ga = GM != 0 ? expf(a_log[job0 / nc1]) : 0.f;
+691-  // GM != 0: in-place transform of a LANDED raw tile -> the same bf16
+692-  // glog bytes GM == 0 stages (fp32 transform + bf16 round == the former
+693-  // P2a fused read, value-identical per element), so P2a reads every
+694-  // mode as GM == 0. Stable softplus subsumes the thr=20 branch
+695-  // (1+e^-20 == 1 in fp32). VL pad rows stay their zfill 0
+696-  // (transform(0) != 0 but the pad algebra needs glog == 0 exactly).
+697-  auto gate_xform = [&](bf16(&gt)[BT][K], int rows) {
+698-    const float* dtr = dtb + (size_t)(job0 / nc1) * K;
+699-    for (int p = tid * 8; p < BT * K; p += blockDim.x * 8) {
+700-      if (VL && p / K >= rows) continue;  // pad rows stay zfill 0
+701-      uint4* gp = reinterpret_cast<uint4*>(&gt[p / K][p % K]);
+702-      uint4 g4 = *gp;
+703-      __nv_bfloat162* g2 = reinterpret_cast<__nv_bfloat162*>(&g4);
+704-      const float4 d0 = *reinterpret_cast<const float4*>(&dtr[p % K]);
+705-      const float4 d1 = *reinterpret_cast<const float4*>(&dtr[p % K + 4]);
+706-      const float dv[8] = {d0.x, d0.y, d0.z, d0.w, d1.x, d1.y, d1.z, d1.w};
+707-#pragma unroll
+--
+1104-      const int p = p2 * 2;
+1105-      *reinterpret_cast<__nv_bfloat162*>(&P[base + p]) =
+1106-          __floats2bfloat162_rn(-sU[p / K][p % K], -sU[p / K][p % K + 1]);
+1107-      *reinterpret_cast<float2*>(&u0[base + p]) = float2{sU[p / K][K + p % K], sU[p / K][K + p % K + 1]};
+1108-    }
+1109-    if (!pieceL) continue;
+1110-    // ---- fused W-form products + IN-TAIL RUNNING COMPOSITION ----
+1111-    // Per chunk: W and w0^T products (w0's operands SWAPPED vs the drained
+1112-    // form — A=u0T, B=kdT — so its product lands in state orientation), then
+1113-    // the piece's running maps compose as a NO-DRAIN tf32 TMEM chain:
+1114-    // Lrun/crun are fp32 D pairs ping-ponging between [0,256) and [256,512).
+1115-    // The chunk's W/w0 products target the FREE pair; W alone is drained
+1116-    // (L = diag(e^gC) - W, staged as fp32 SWZ32 tiles); then Lrun_new =
+1117-    // Lrun @ L-tiles overwrites the drained W slot and crun_new = crun @
+1118-    // L-tiles accumulates onto the completed w0 product (the c fold).
+1119-    // ONE commit+wait per chunk (the products'); the compose commit is
+1120-    // waited a chunk LATE (pend_wait, before its B-tile smem is rewritten);
+1121-    // piece-end chunks wait in-chunk and drain the final maps to global.
+1122-    __syncthreads();  // everyone past the P/u0 reads of sU
+1123-    // tail pTt: TMA the L2-hot negated-P copy this CTA stored above — the
+1124-    // [tok][kc] global IS the W mma's MN-major B image (probe-verified: SWZ128
+1125-    // box == the swz128b staging bytes; 2 boxes = the 2 MN atoms at LBO
+1126-    // 8192). Bytes are the former in-smem pack's sign-flipped, so the
+1127-    // product lands -W; the L drain folds the sign exactly. The mb_f
+1128:    // phase is waited by ALL threads before the W mma.
+1129-    if (tid == 0) {
+1130-      ptx::fence_async_global();  // P sts -> async proxy (TMA)
+1131-      ptx::mbar_arrive_expect_tx(&mb_f, uint32_t(sizeof(sp.b.pTt)));
+1132-      ptx::cp_async_bulk_tensor_2d_load(ptx::to_shared(&sp.b.pTt[0][0]), ptm, 0, (c * H + h) * BT, &mb_f);
+1133-      ptx::cp_async_bulk_tensor_2d_load(ptx::to_shared(&sp.b.pTt[64][0]), ptm, 64, (c * H + h) * BT, &mb_f);
+1134-    }
+1135-    const size_t cbase = ((size_t)c * H + h) * BT * K;
+1136-#pragma unroll
+1137-    for (int hb = 0; hb < 2; ++hb) {  // kdec loads issue first (MLP)
+1138-      bf16 kdv[8];
+1139-#pragma unroll
+1140-      for (int j = 0; j < 8; ++j)
+1141-        kdv[j] = kdec[cbase + tid + (hb * 8 + j) * 512];
+1142-#pragma unroll
+1143-      for (int j = 0; j < 8; ++j) {
+1144-        const int p = tid + (hb * 8 + j) * 512;
+1145-        const int kc = p / BT, tok = p % BT;
+1146-        // 128B-swizzle placement (16B atoms XOR row): swz128 desc form
+1147-        const int tokS = (((tok >> 3) ^ (kc & 7)) << 3) | (tok & 7);
+1148-        sp.b.kdT[kc][tokS] = kdv[j];
+1149-        const float uv = sU[tok][K + kc];
+1150-        const bf16 uh = __float2bfloat16(uv);
+1151-        sp.b.u0Th[kc][tokS] = uh;
+1152-        sp.b.u0Tl[kc][tokS] = __float2bfloat16(uv - __bfloat162float(uh));
+1153-      }
+1154-    }
+1155-    ptx::tcgen05_fence_before_thread_sync();
+1156-    __syncthreads();
+1157-    const uint32_t taddr = s_taddr;
+1158-    const uint32_t idw = ptx::mma_inst_desc_dense<ptx::MmaDenseKind::F16>(
+1159-        128, 128, ptx::F16Type::BF16, ptx::F16Type::BF16, ptx::DType::F32, ptx::Major::K, ptx::Major::K);
+1160-    // TMA-fed pTt is the [tok][kc] P image: B is MN-major (idesc bit 16)
+1161-    const uint32_t idwm = ptx::mma_inst_desc_dense<ptx::MmaDenseKind::F16>(
+1162-        128, 128, ptx::F16Type::BF16, ptx::F16Type::BF16, ptx::DType::F32, ptx::Major::K, ptx::Major::MN);
+1163-    const uint32_t tp = (sub & 1) ? 256u : 0u;  // this chunk's pair
+1164:    // pTt TMA landed. ALL threads consume the phase: skipping an open
+1165:    // phase would alias the next parity wait against the previous completed
+1166:    ptx::mbar_wait_parity(&mb_f, mbph & 1);
+1167:    ++mbph;
+1168-    if (tid == 0) {
+1169-      ptx::tcgen05_fence_after_thread_sync();
+1170-      // W-D at tp+[0,128): -W[kc_out][kc_in] = kdecT @ P via MN-major B
+1171-#pragma unroll
+1172-      for (int k16 = 0; k16 < BT / 16; ++k16) {
+1173-        const uint64_t da = ptx::mma_smem_desc_k_major<uint16_t, 64, 128>(ptx::to_shared(&sp.b.kdT[0][0]) + k16 * 32);
+1174-        const uint64_t db =
+1175-            ptx::mma_smem_desc_mn_major<uint16_t, 64, 128, 128>(ptx::to_shared(&sp.b.pTt[0][0]) + k16 * 2048);
+1176-        ptx::tcgen05_mma_f16(taddr + tp, da, db, idwm, k16 ? 1u : 0u);
+1177-      }
+1178-      // w0^T-D at tp+[128,256): w0^T[vc][kc_out] = u0T @ kdT^T (hi + lo
+1179-      // A) — this slot IS crun's seed / c-fold addend
+1180-      for (int half = 0; half < 2; ++half)
+1181-#pragma unroll
+1182-        for (int k16 = 0; k16 < BT / 16; ++k16) {
+1183-          const uint64_t da = ptx::mma_smem_desc_k_major<uint16_t, 64, 128>(
+1184-              ptx::to_shared(half ? &sp.b.u0Tl[0][0] : &sp.b.u0Th[0][0]) + k16 * 32);
+1185-          const uint64_t db = ptx::mma_smem_desc_k_major<uint16_t, 64, 128>(ptx::to_shared(&sp.b.kdT[0][0]) + k16 * 32);
+1186-          ptx::tcgen05_mma_f16(taddr + tp + 128u, da, db, idw, (half | k16) ? 1u : 0u);
+1187-        }
+1188:      ptx::tcgen05_commit_arrive(&mb_f);
+1189-    }
+1190-    if constexpr (GM != 0)  // next chunk's RAW gates landed long ago (P1
+1191-      // cp.async): transform them here, under the W/w0 mma wait, off the
+1192-      // serial cumsum path. Each thread rewrites exactly the bytes it
+1193-      // staged, so its own-group wait suffices; the next chunk's P2a
+1194-      // read is barriers away (P7/P1 syncthreads).
+1195-      if (sub + 1 < njobs) {
+1196-        ptx::cp_async_wait_pending(0);
+1197-        const int t1x = ((job + 1) % nc1) * BT + tokoff;
+1198-        gate_xform(S.sgb[(sub + 1) & 1], VL ? min(BT, tse - t1x) : BT);
+1199-      }
+1200:    ptx::mbar_wait_parity(&mb_f, mbph & 1);
+1201:    ++mbph;
+1202-    ptx::tcgen05_fence_after_thread_sync();
+1203-    const int band = (warp & 3) * 32, ch = warp >> 2;  // 16 warps: 32-col ch
+1204-    const uint32_t lane_hi = uint32_t(band) << 16;
+1205-    // W drain -> L = diag(e^gC) - W, staged as fp32 SWZ32 K=8-chunk tiles
+1206-    // (the tf32 compose's B; b spans exactly slice ch*4+b). SWZ32 row form:
+1207-    // a row's two 16B halves swap on (out>>2)&1.
+1208-    // The w0 product is NOT drained — it stays in TMEM as crun's addend.
+1209-    for (int b = 0; b < 4; ++b) {
+1210-      uint32_t r[8];
+1211-      ptx::tcgen05_ld_32x32b_x8(
+1212-          taddr + lane_hi + (tp + uint32_t(ch * 32 + b * 8)), r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]);
+1213-      ptx::tcgen05_wait_ld();
+1214-      float lt[8];
+1215-#pragma unroll
+1216-      for (int j = 0; j < 8; ++j) {
+1217-        const int kin = ch * 32 + b * 8 + j;
+1218-        // the mma drained -W (sign-flipped B bytes): a + (-x) == a - x
+1219-        // exactly (IEEE), so L is byte-identical to the former pack's
+1220-        lt[j] = (band + lane == kin ? gC[((size_t)c * H + h) * K + kin] : 0.f) + __int_as_float(r[j]);
+1221-      }
+1222-      const bool sw = ((band + lane) >> 2) & 1;
+1223-      const float4 lo = float4{lt[0], lt[1], lt[2], lt[3]};
+1224-      const float4 hi = float4{lt[4], lt[5], lt[6], lt[7]};
+1225-      float4* dst = reinterpret_cast<float4*>(&sp.g.sLt[ch * 4 + b][band + lane][0]);
+--
+1278-                taddr + lane_hi + (tp + uint32_t(ch * 32 + c4)),
+1279-                __float_as_int(lr[c4]),
+1280-                __float_as_int(lr[c4 + 1]),
+1281-                __float_as_int(lr[c4 + 2]),
+1282-                __float_as_int(lr[c4 + 3]));
+1283-          ptx::tcgen05_wait_st();
+1284-        }
+1285-      } else {
+1286-        // no-drain tf32 compose: D(tp) = Lrun @ L-tiles (scale 0 overwrites
+1287-        // the drained W), D(tp+128) = crun @ L-tiles + w0 (scale 1 onto the
+1288-        // completed product). A = the other pair's fp32 D, read as tf32;
+1289-        // no wait here — the commit is consumed by pend_wait / piece end.
+1290-        if (tid == 0) {
+1291-          const uint32_t idt = ptx::mma_inst_desc_tf32(128, K);
+1292-          const uint32_t sp2 = tp ^ 256u;
+1293-          for (int st2 = 0; st2 < 2; ++st2)
+1294-#pragma unroll
+1295-            for (int s = 0; s < 16; ++s)
+1296-              mma_tf32_atmem(
+1297-                  taddr + tp + uint32_t(st2 * 128),
+1298-                  taddr + (sp2 + uint32_t(st2 * 128 + 8 * s)),
+1299-                  ptx::mma_smem_desc_k_major<uint32_t, 8, 32>(ptx::to_shared(&sp.g.sLt[s][0][0])),
+1300-                  idt,
+1301-                  (st2 | s) ? 1u : 0u);
+1302:          ptx::tcgen05_commit_arrive(&mb_f);
+1303-        }
+1304-        if (piece_end) {  // the piece's ONE remaining drain: final maps
+1305:          ptx::mbar_wait_parity(&mb_f, mbph & 1);
+1306:          ++mbph;
+1307-          ptx::tcgen05_fence_after_thread_sync();
+1308-          alignas(16) float lr[32], cr[32];
+1309-          drain_reg(tp, lr);
+1310-          drain_reg(tp + 128u, cr);
+1311-          store_maps(lr, cr);
+1312-        } else {
+1313-          pend = true;
+1314-        }
+1315-      }
+1316-    }
+1317-    if (sub + 1 < njobs) __syncthreads();  // slot reuse across jobs
+1318-  }  // job loop
+1319-  if (pieceL) {
+1320-    if (warp == 0) ptx::tcgen05_dealloc(s_taddr, 512);
+1321-    ptx::tcgen05_relinquish();
+1322-  }
+1323-}
+1324-
+1325-template <int GM = 0, bool RAW = false, bool BSIG = false>
+1326-__global__ void __launch_bounds__(512) k1_factors_mma(
+1327-    const bf16* __restrict__ q,
+1328-    const bf16* __restrict__ kk,
+1329-    const bf16* __restrict__ v,
+1330-    const bf16* __restrict__ glog,
+--
+1369-      kdec,
+1370-      qdec,
+1371-      aqk_h,
+1372-      aqk_l,
+1373-      gC,
+1374-      pieceL,
+1375-      piecec,
+1376-      pc * H + h,
+1377-      0,
+1378-      0,
+1379-      0,
+1380-      a_log,
+1381-      dtb,
+1382-      lb);
+1383-}
+1384-// ---------------- K2: tcgen05 chain (A-from-TMEM, B via TMA) --------------
+1385-// Per-piece CTA walks its chunks serially. State S^T lives in registers —
+1386-// thread (band = (warp&3)*32, ch = warp>>2) owns S^T[vc = band+lane][kc in
+1387-// ch*32 + 0..31] — and is re-staged per chunk as a packed SINGLE-bf16 TMEM
+1388-// A region (precision study: the bf16 B operands, not the S read, set the error
+1389-// floor — hi/lo S buys <= 1.27x in the kernel ctx). Products (A-from-TMEM,
+1390-// B = TMA 128B-swizzled K-major tiles):
+1391-//   P1: U^T[vc,tok]  = S^T @ Pneg^T   (M=128 N=64  K=128; +u0 in drain)
+1392-//   P2: S^T[vc,kc]  += U^T @ kdecT^T  (M=128 N=128 K=64;  decay in drain)
+1393:// o is fused: P3 (o^T += S^T@qdec^T) rides phase 1; P4 (o^T += u^T@Aqk^T)
+1394:// rides phase 2. TMEM cols: [0,64) P1-D | [64,192) P2-D | [192,224) A2hi |
+1395-// [224,256) A2lo | [256,320) A1 | [384,448) o-D.
+1396-// SELF-START: the piece's start state composes from h0 through the prefix
+1397-// pieces' (L, c) maps as a NO-DRAIN tf32 TMEM chain, gated on pflags.
+1398-template <bool VL = false>  // varlen: pad-row masks compile-time-gated
+1399-__device__ static void chain_body(
+1400-    ChainSmem& S,
+1401-    int h,
+1402-    int sg,
+1403-    int nseg,
+1404-    const CUtensorMap& pneg_map,
+1405-    const CUtensorMap& kdt_map,
+1406-    const CUtensorMap& qd_map,
+1407-    const CUtensorMap& aqh_map,
+1408-    const CUtensorMap& aql_map,
+1409-    const CUtensorMap& u0f_map,
+1410-    const float* __restrict__ gC,
+1411-    int n_chunks,
+1412-    int H,
+1413-    bf16* __restrict__ o,
+1414-    float* __restrict__ Sf,
+1415-    // per-chunk states (nullptr = off): row = GLOBAL chunk c, [c][h][K][V] or
+1416-    // [c][h][V][K] (hpc_v_first), fp32 or bf16 (hpc_bf16)
+1417-    void* __restrict__ hpc,
+1418-    bool hpc_bf16,
+--
+1487-    float* bL = reinterpret_cast<float*>(&sPneg[0][0][0][0]);
+1488-    float* bC = bL + K * K;
+1489-    bf16* pL = reinterpret_cast<bf16*>(bL + K * K / 2);
+1490-    static_assert(sizeof(S.sPneg) + sizeof(S.sKdT) + sizeof(S.sQd) + sizeof(S.sAh) + sizeof(S.sAl) == 2 * K * K * 4);
+1491-#pragma unroll
+1492-    for (int c4 = 0; c4 < 32; c4 += 4) {  // I diag + h0 fp32, no pack
+1493-      uint32_t iv[4], sv[4];
+1494-#pragma unroll
+1495-      for (int e = 0; e < 4; ++e) {
+1496-        iv[e] = __float_as_int(vc == ch * 32 + c4 + e ? 1.f : 0.f);
+1497-        sv[e] = __float_as_int(Sreg[c4 + e]);
+1498-      }
+1499-      ptx::tcgen05_st_32x32b_x4(taddr + lane_hi + uint32_t(256 + ch * 32 + c4), iv[0], iv[1], iv[2], iv[3]);
+1500-      ptx::tcgen05_st_32x32b_x4(taddr + lane_hi + uint32_t(ch * 32 + c4), sv[0], sv[1], sv[2], sv[3]);
+1501-    }
+1502-    ptx::tcgen05_wait_st();
+1503-    ptx::tcgen05_fence_before_thread_sync();
+1504-    __syncthreads();
+1505-    const uint32_t idt = ptx::mma_inst_desc_tf32(128, K);
+1506-    for (int q2 = 0; q2 < sg; ++q2) {
+1507-      if (tid == 0) {
+1508-        if (pflags)  // fused grid: trail piece q2's producer
+1509-          while (ptx::ld_acq_b32(&pflags[(pbase + q2) * H + h]) < 1u)
+1510-            __nanosleep(128);
+1511:        if (q2) ptx::mbar_wait_parity(&S.mb_cmL, (q2 - 1) & 1);
+1512-        ptx::mbar_arrive_expect_tx(&S.mb_pre, K * K * 2);
+1513-        ptx::cp_async_bulk_tensor_2d_load(ptx::to_shared(pL), sl_map, 0, ((pbase + q2) * H + h) * K, &S.mb_pre);
+1514-        ptx::cp_async_bulk_tensor_2d_load(
+1515-            ptx::to_shared(pL) + uint32_t(K * 64 * 2), sl_map, 64, ((pbase + q2) * H + h) * K, &S.mb_pre);
+1516:        if (q2) ptx::mbar_wait_parity(&S.mb_cmC, (q2 - 1) & 1);
+1517-        ptx::mbar_arrive_expect_tx(&S.mb_preC, K * K * 4);
+1518-        for (int s = 0; s < 16; ++s)
+1519-          ptx::cp_async_bulk_tensor_2d_load(
+1520-              ptx::to_shared(bC) + uint32_t(s * 4096), sc_map, 8 * s, ((pbase + q2) * H + h) * K, &S.mb_preC);
+1521-      }
+1522-      // L landed: widen (its slot writes are safe — piece q2-1's mmas
+1523-      // retired before tid0 issued this TMA, and the widen is ordered
+1524-      // after the TMA through mb_pre)
+1525:      ptx::mbar_wait_parity(&S.mb_pre, q2 & 1);
+1526-      widen_map_tf32(bL, pL, vc, ch);
+1527-      ptx::tcgen05_fence_before_thread_sync();
+1528-      __syncthreads();
+1529-      if (tid == 0) {
+1530-        ptx::tcgen05_fence_after_thread_sync();
+1531-        const uint32_t src = (q2 & 1) ? 128u : 0u, tgt = 128u - src;
+1532-        for (int s = 0; s < 16; ++s)
+1533-          mma_tf32_atmem(
+1534-              taddr + tgt,
+1535-              taddr + src + uint32_t(8 * s),
+1536-              ptx::mma_smem_desc_k_major<uint32_t, 8, 32>(ptx::to_shared(bL) + uint32_t(s * 4096)),
+1537-              idt,
+1538-              s ? 1u : 0u);
+1539:        ptx::tcgen05_commit_arrive(&S.mb_cmL);
+1540:        ptx::mbar_wait_parity(&S.mb_preC, q2 & 1);  // c: direct fp32
+1541-        for (int s = 0; s < 16; ++s)
+1542-          mma_tf32_atmem(
+1543-              taddr + tgt,
+1544-              taddr + uint32_t(256 + 8 * s),
+1545-              ptx::mma_smem_desc_k_major<uint32_t, 8, 32>(ptx::to_shared(bC) + uint32_t(s * 4096)),
+1546-              idt,
+1547-              1u);
+1548:        ptx::tcgen05_commit_arrive(&S.mb_cmC);
+1549-      }
+1550-    }
+1551-    if (tid == 0)  // last commit
+1552:      ptx::mbar_wait_parity(&S.mb_cmC, (sg - 1) & 1);
+1553-    __syncthreads();
+1554-    ptx::tcgen05_fence_after_thread_sync();
+1555-    const uint32_t fin = ((sg - 1) & 1) ? 0u : 128u;  // last tgt region
+1556-#pragma unroll
+1557-    for (int b2 = 0; b2 < 4; ++b2) {
+1558-      uint32_t r[8];
+1559-      ptx::tcgen05_ld_32x32b_x8(
+1560-          taddr + lane_hi + fin + uint32_t(ch * 32 + b2 * 8), r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]);
+1561-      ptx::tcgen05_wait_ld();
+1562-#pragma unroll
+1563-      for (int j = 0; j < 8; ++j)
+1564-        Sreg[b2 * 8 + j] = __int_as_float(r[j]);  // c folded in-pipe
+1565-    }
+1566-    __syncthreads();
+1567-  }  // sg > 0
+1568-  // packed cvt.bf16x2 (per-half rn == the scalar pair; low half = e0)
+1569-  auto pack2 = [](float e0, float e1, uint32_t& hi, uint32_t& lo) {
+1570-    const __nv_bfloat162 h2 = __floats2bfloat162_rn(e0, e1);

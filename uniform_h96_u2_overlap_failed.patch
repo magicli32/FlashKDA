@@ -1,0 +1,55 @@
+diff --git a/csrc/smxx/fwd_launch.cu b/csrc/smxx/fwd_launch.cu
+index a2237e1..c2ee866 100644
+--- a/csrc/smxx/fwd_launch.cu
++++ b/csrc/smxx/fwd_launch.cu
+@@ -237,6 +237,18 @@ void launch_fwd(
+ 
+ #if BLOCK_LEVEL_K1 >= 0
+     cudaMemsetAsync(ws_ready, 0, ready_bytes, stream);
++
++    // Varlen K1 maps global_tile_idx through ws_tile_prefix.
++    // Build it before producer_start_event so the producer stream
++    // cannot observe an uninitialized or stale prefix table.
++    if constexpr (IsVarlen) {
++        _flash_kda_build_tile_prefix<<<1, 32, 0, stream>>>(
++            cu_seqlens_ptr,
++            N,
++            CHUNK,
++            ws_tile_prefix
++        );
++    }
+ #endif
+ 
+     // ============================================================
+@@ -258,6 +270,19 @@ void launch_fwd(
+     if constexpr (!IsVarlen) {
+         use_k1k2_overlap =
+             (N == 1 && T_total == 8192 && (H == 96 || H == 64));
++    } else {
++        // U2-A diagnostic: opt-in varlen overlap for Uniform H96.
++        // Every other varlen call retains the established serial path.
++        const char* uniform_overlap_env =
++            std::getenv("FLASH_KDA_UNIFORM_H96_OVERLAP");
++
++        use_k1k2_overlap =
++            uniform_overlap_env != nullptr &&
++            std::atoi(uniform_overlap_env) != 0 &&
++            N == 8 &&
++            T_total == 8192 &&
++            H == 96 &&
++            D == 128;
+     }
+ 
+     // Benchmark/debug switch: allow the exact same binary to fall back
+@@ -403,11 +428,6 @@ void launch_fwd(
+             smem_size_k1_launch
+         );
+ 
+-        if constexpr (IsVarlen) {
+-            _flash_kda_build_tile_prefix<<<1, 32, 0, stream>>>(
+-                cu_seqlens_ptr, N, CHUNK, ws_tile_prefix);
+-        }
+-
+         dim3 grid_k1 = use_k1k2_overlap
+             ? dim3(total_tiles * H, 1, 1)
+             : dim3(total_tiles, H, 1);

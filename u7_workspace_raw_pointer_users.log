@@ -1,0 +1,31 @@
+csrc/smxx/utils.cuh:81:struct K1WorkspaceRawPointers {
+csrc/smxx/fwd_kernel1.cuh:144:    K1WorkspaceRawPointers ws_raw
+csrc/smxx/fwd_kernel1.cuh:568:            ws_raw.k_decayed + int64_t(ws_idx) * (CHUNK * D);
+csrc/smxx/fwd_kernel1.cuh:576:            ws_raw.q_decayed + int64_t(ws_idx) * (CHUNK * D);
+csrc/smxx/fwd_kernel1.cuh:584:            ws_raw.k_restored + int64_t(ws_idx) * (CHUNK * D);
+csrc/smxx/fwd_kernel1.cuh:592:            ws_raw.g_total + int64_t(ws_idx) * D;
+csrc/smxx/fwd_kernel1.cuh:600:            ws_raw.inv + int64_t(ws_idx) * (CHUNK * CHUNK);
+csrc/smxx/fwd_kernel1.cuh:608:            ws_raw.mqk + int64_t(ws_idx) * (CHUNK * CHUNK);
+csrc/smxx/fwd_kernel2.cuh:161:    K1WorkspaceRawPointers ws_raw
+csrc/smxx/fwd_kernel2.cuh:389:                ws_raw.k_decayed + int64_t(ws_idx) * (CHUNK * D),
+csrc/smxx/fwd_kernel2.cuh:395:                ws_raw.q_decayed + int64_t(ws_idx) * (CHUNK * D),
+csrc/smxx/fwd_kernel2.cuh:401:                ws_raw.k_restored + int64_t(ws_idx) * (CHUNK * D),
+csrc/smxx/fwd_kernel2.cuh:407:                ws_raw.g_total + int64_t(ws_idx) * D,
+csrc/smxx/fwd_kernel2.cuh:413:                ws_raw.inv + int64_t(ws_idx) * (CHUNK * CHUNK),
+csrc/smxx/fwd_kernel2.cuh:419:                ws_raw.mqk + int64_t(ws_idx) * (CHUNK * CHUNK),
+csrc/smxx/fwd_kernel2.cuh:887:    K1WorkspaceRawPointers ws_raw
+csrc/smxx/fwd_kernel2.cuh:1429:                ws_raw.k_decayed + int64_t(ws_idx) * (CHUNK * D),
+csrc/smxx/fwd_kernel2.cuh:1435:                ws_raw.q_decayed + int64_t(ws_idx) * (CHUNK * D),
+csrc/smxx/fwd_kernel2.cuh:1441:                ws_raw.k_restored + int64_t(ws_idx) * (CHUNK * D),
+csrc/smxx/fwd_kernel2.cuh:1447:                ws_raw.g_total + int64_t(ws_idx) * D,
+csrc/smxx/fwd_kernel2.cuh:1453:                ws_raw.inv + int64_t(ws_idx) * (CHUNK * CHUNK),
+csrc/smxx/fwd_kernel2.cuh:1459:                ws_raw.mqk + int64_t(ws_idx) * (CHUNK * CHUNK),
+csrc/smxx/fwd_kernel2.cuh:2214:    K1WorkspaceRawPointers ws_raw
+csrc/smxx/fwd_kernel2.cuh:2442:                ws_raw.k_decayed + int64_t(ws_idx) * (CHUNK * D),
+csrc/smxx/fwd_kernel2.cuh:2448:                ws_raw.q_decayed + int64_t(ws_idx) * (CHUNK * D),
+csrc/smxx/fwd_kernel2.cuh:2454:                ws_raw.k_restored + int64_t(ws_idx) * (CHUNK * D),
+csrc/smxx/fwd_kernel2.cuh:2460:                ws_raw.g_total + int64_t(ws_idx) * D,
+csrc/smxx/fwd_kernel2.cuh:2466:                ws_raw.inv + int64_t(ws_idx) * (CHUNK * CHUNK),
+csrc/smxx/fwd_kernel2.cuh:2472:                ws_raw.mqk + int64_t(ws_idx) * (CHUNK * CHUNK),
+csrc/smxx/fwd_launch.cu:121:    K1WorkspaceRawPointers ws_raw{
+csrc/smxx/fwd_launch.cu:922:    K1WorkspaceRawPointers ws_raw{

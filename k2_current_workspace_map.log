@@ -1,0 +1,6 @@
+  2197	    CUTE_GRID_CONSTANT TmaLoadWsKD const tma_load_ws_kd,
+  2198	    CUTE_GRID_CONSTANT TmaLoadWsQD const tma_load_ws_qd,
+  2199	    CUTE_GRID_CONSTANT TmaLoadWsKR const tma_load_ws_kr,
+  2200	    CUTE_GRID_CONSTANT TmaLoadWsGT const tma_load_ws_gt,
+  2201	    CUTE_GRID_CONSTANT TmaLoadWsINV const tma_load_ws_inv,
+  2202	    CUTE_GRID_CONSTANT TmaLoadWsMqk const tma_load_ws_mqk,

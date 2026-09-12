@@ -1,0 +1,5 @@
+csrc/smxx/fwd_kernel1.cuh:547:    int ws_idx = head_idx * total_tiles + global_tile_idx;
+csrc/smxx/fwd_kernel2.cuh:348:            int ws_idx = head_idx * total_tiles + tile_base + t;
+csrc/smxx/fwd_kernel2.cuh:1388:            int ws_idx = head_idx * total_tiles + tile_base + t;
+csrc/smxx/fwd_kernel2.cuh:2401:            int ws_idx = head_idx * total_tiles + tile_base + t;
+csrc/smxx/fwd_state_only.cuh:242:            int ws_idx = head_idx * total_tiles + tile_base + t;

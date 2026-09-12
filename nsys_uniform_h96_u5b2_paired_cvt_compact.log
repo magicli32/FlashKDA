@@ -1,0 +1,12 @@
+01 K1           dur_us= 281.411 grid=512x96 block=256 regs=32 stream=7
+02 K2_resident  dur_us= 340.291 grid=8x96 block=192 regs=166 stream=7
+03 K1           dur_us= 275.843 grid=512x96 block=256 regs=32 stream=7
+04 K2_resident  dur_us= 339.395 grid=8x96 block=192 regs=166 stream=7
+05 K1           dur_us= 274.723 grid=512x96 block=256 regs=32 stream=7
+06 K2_shared    dur_us= 371.075 grid=8x96 block=192 regs=118 stream=7
+07 K1           dur_us= 277.155 grid=512x96 block=256 regs=32 stream=7
+08 K2_shared    dur_us= 371.139 grid=8x96 block=192 regs=118 stream=7
+09 K1           dur_us= 280.099 grid=512x96 block=256 regs=32 stream=7
+10 K2_generic   dur_us= 402.019 grid=8x96 block=192 regs=118 stream=7
+11 K1           dur_us= 277.859 grid=512x96 block=256 regs=32 stream=7
+12 K2_generic   dur_us= 402.979 grid=8x96 block=192 regs=118 stream=7

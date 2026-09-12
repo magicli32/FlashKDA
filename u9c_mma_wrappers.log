@@ -1,0 +1,34 @@
+static __device__ __forceinline__ void tcgen05_commit_arrive(uint64_t* bar) {
+  asm volatile("tcgen05.commit.cta_group::1.mbarrier::arrive::one.b64 [%0];" ::"r"(to_shared(bar)));
+}
+static __device__ __forceinline__ void tcgen05_fence_before_thread_sync() {
+  asm volatile("tcgen05.fence::before_thread_sync;");
+}
+static __device__ __forceinline__ void tcgen05_fence_after_thread_sync() {
+  asm volatile("tcgen05.fence::after_thread_sync;");
+}
+static __device__ __forceinline__ void
+tcgen05_mma_f16(uint32_t d, uint64_t desc_a, uint64_t desc_b, uint32_t inst_desc_high, uint32_t scale_c) {
+  asm volatile(
+      "{\n\t.reg .pred p;\n\t"
+      "setp.ne.b32 p, %4, 0;\n\t"
+      "tcgen05.mma.cta_group::1.kind::f16 [%0], %1, %2, %3, p;\n\t}\n" ::"r"(d),
+      "l"(desc_a),
+      "l"(desc_b),
+      "r"(inst_desc_high),
+      "r"(scale_c));
+}
+// kind::f16 with the A operand sourced from TMEM (packed-bf16 hi/lo A)
+static __device__ __forceinline__ void
+tcgen05_mma_f16_atmem(uint32_t d, uint32_t a_tmem, uint64_t desc_b, uint32_t inst_desc_high, uint32_t scale_c) {
+  asm volatile(
+      "{\n\t.reg .pred p;\n\t"
+      "setp.ne.b32 p, %4, 0;\n\t"
+      "tcgen05.mma.cta_group::1.kind::f16 [%0], [%1], %2, %3, p;\n\t}\n" ::"r"(d),
+      "r"(a_tmem),
+      "l"(desc_b),
+      "r"(inst_desc_high),
+      "r"(scale_c));
+}
+
+// ---- MMA descriptors (smem matrix desc + instruction desc, Table 44) ----

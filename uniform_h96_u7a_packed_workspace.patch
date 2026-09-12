@@ -1,0 +1,470 @@
+diff --git a/csrc/smxx/fwd_kernel1.cuh b/csrc/smxx/fwd_kernel1.cuh
+index d45c6af..1a41773 100644
+--- a/csrc/smxx/fwd_kernel1.cuh
++++ b/csrc/smxx/fwd_kernel1.cuh
+@@ -564,48 +564,112 @@ __global__ void __launch_bounds__(NumThreads, 8) _flash_kda_fwd_prepare(
+         // K2 restores the exact same byte image into the same shared-memory
+         // layout, so no TensorMap coordinate interpretation is needed here.
+ 
+-        BF16* k_decayed_dst =
+-            ws_raw.k_decayed + int64_t(ws_idx) * (CHUNK * D);
++        using PackedWS = WorkspaceSizes<CHUNK, D>;
++
++        BF16* k_decayed_dst;
++        BF16* q_decayed_dst;
++        BF16* k_restored_dst;
++        float* g_total_dst;
++        BF16* inv_dst;
++        BF16* mqk_dst;
++
++        if (ws_raw.packed_base != nullptr) {
++            char* tile_base =
++                ws_raw.packed_base +
++                int64_t(ws_idx) * PackedWS::kPerTile;
++
++            k_decayed_dst =
++                reinterpret_cast<BF16*>(tile_base);
++
++            q_decayed_dst =
++                reinterpret_cast<BF16*>(
++                    tile_base + PackedWS::kKDecayed);
++
++            k_restored_dst =
++                reinterpret_cast<BF16*>(
++                    tile_base +
++                    PackedWS::kKDecayed +
++                    PackedWS::kQDecayed);
++
++            g_total_dst =
++                reinterpret_cast<float*>(
++                    tile_base +
++                    PackedWS::kKDecayed +
++                    PackedWS::kQDecayed +
++                    PackedWS::kKRestored);
++
++            inv_dst =
++                reinterpret_cast<BF16*>(
++                    tile_base +
++                    PackedWS::kKDecayed +
++                    PackedWS::kQDecayed +
++                    PackedWS::kKRestored +
++                    PackedWS::kGTotal);
++
++            mqk_dst =
++                reinterpret_cast<BF16*>(
++                    tile_base +
++                    PackedWS::kKDecayed +
++                    PackedWS::kQDecayed +
++                    PackedWS::kKRestored +
++                    PackedWS::kGTotal +
++                    PackedWS::kINV);
++        } else {
++            k_decayed_dst =
++                ws_raw.k_decayed +
++                int64_t(ws_idx) * (CHUNK * D);
++
++            q_decayed_dst =
++                ws_raw.q_decayed +
++                int64_t(ws_idx) * (CHUNK * D);
++
++            k_restored_dst =
++                ws_raw.k_restored +
++                int64_t(ws_idx) * (CHUNK * D);
++
++            g_total_dst =
++                ws_raw.g_total +
++                int64_t(ws_idx) * D;
++
++            inv_dst =
++                ws_raw.inv +
++                int64_t(ws_idx) * (CHUNK * CHUNK);
++
++            mqk_dst =
++                ws_raw.mqk +
++                int64_t(ws_idx) * (CHUNK * CHUNK);
++        }
++
+         cute::SM90_BULK_COPY_S2G::copy(
+             shared_storage.k_decayed.begin(),
+             k_decayed_dst,
+             int32_t(CHUNK * D * sizeof(BF16)));
+         tma_store_arrive();
+ 
+-        BF16* q_decayed_dst =
+-            ws_raw.q_decayed + int64_t(ws_idx) * (CHUNK * D);
+         cute::SM90_BULK_COPY_S2G::copy(
+             shared_storage.q_decayed.begin(),
+             q_decayed_dst,
+             int32_t(CHUNK * D * sizeof(BF16)));
+         tma_store_arrive();
+ 
+-        BF16* k_restored_dst =
+-            ws_raw.k_restored + int64_t(ws_idx) * (CHUNK * D);
+         cute::SM90_BULK_COPY_S2G::copy(
+             shared_storage.k_restored.begin(),
+             k_restored_dst,
+             int32_t(CHUNK * D * sizeof(BF16)));
+         tma_store_arrive();
+ 
+-        float* g_total_dst =
+-            ws_raw.g_total + int64_t(ws_idx) * D;
+         cute::SM90_BULK_COPY_S2G::copy(
+             shared_storage.g_total.begin(),
+             g_total_dst,
+             int32_t(D * sizeof(float)));
+         tma_store_arrive();
+ 
+-        BF16* inv_dst =
+-            ws_raw.inv + int64_t(ws_idx) * (CHUNK * CHUNK);
+         cute::SM90_BULK_COPY_S2G::copy(
+             shared_storage.INV.begin(),
+             inv_dst,
+             int32_t(CHUNK * CHUNK * sizeof(BF16)));
+         tma_store_arrive();
+ 
+-        BF16* mqk_dst =
+-            ws_raw.mqk + int64_t(ws_idx) * (CHUNK * CHUNK);
+         cute::SM90_BULK_COPY_S2G::copy(
+             shared_storage.Mqk.begin(),
+             mqk_dst,
+diff --git a/csrc/smxx/fwd_kernel2.cuh b/csrc/smxx/fwd_kernel2.cuh
+index f59d949..07cf6ce 100644
+--- a/csrc/smxx/fwd_kernel2.cuh
++++ b/csrc/smxx/fwd_kernel2.cuh
+@@ -385,41 +385,62 @@ __global__ void __maxnreg__(120) _flash_kda_fwd_recurrence_bf16_shared(
+             // shared-memory layouts and attach all copies to the same
+             // PipelineTmaAsync transaction barrier.
+ 
+-            cute::SM90_BULK_COPY_G2S::copy(
+-                ws_raw.k_decayed + int64_t(ws_idx) * (CHUNK * D),
+-                reinterpret_cast<uint64_t*>(tma_barrier),
+-                shared_storage.input[stage].k_decayed.begin(),
+-                int32_t(CHUNK * D * sizeof(BF16)));
+-
+-            cute::SM90_BULK_COPY_G2S::copy(
+-                ws_raw.q_decayed + int64_t(ws_idx) * (CHUNK * D),
+-                reinterpret_cast<uint64_t*>(tma_barrier),
+-                shared_storage.input[stage].q_decayed.begin(),
+-                int32_t(CHUNK * D * sizeof(BF16)));
+-
+-            cute::SM90_BULK_COPY_G2S::copy(
+-                ws_raw.k_restored + int64_t(ws_idx) * (CHUNK * D),
+-                reinterpret_cast<uint64_t*>(tma_barrier),
+-                shared_storage.input[stage].k_restored.begin(),
+-                int32_t(CHUNK * D * sizeof(BF16)));
+-
+-            cute::SM90_BULK_COPY_G2S::copy(
+-                ws_raw.g_total + int64_t(ws_idx) * D,
+-                reinterpret_cast<uint64_t*>(tma_barrier),
+-                shared_storage.input[stage].g_total.begin(),
+-                int32_t(D * sizeof(float)));
+-
+-            cute::SM90_BULK_COPY_G2S::copy(
+-                ws_raw.inv + int64_t(ws_idx) * (CHUNK * CHUNK),
+-                reinterpret_cast<uint64_t*>(tma_barrier),
+-                shared_storage.input[stage].INV.begin(),
+-                int32_t(CHUNK * CHUNK * sizeof(BF16)));
+-
+-            cute::SM90_BULK_COPY_G2S::copy(
+-                ws_raw.mqk + int64_t(ws_idx) * (CHUNK * CHUNK),
+-                reinterpret_cast<uint64_t*>(tma_barrier),
+-                shared_storage.input[stage].Mqk.begin(),
+-                int32_t(CHUNK * CHUNK * sizeof(BF16)));
++            if (ws_raw.packed_base != nullptr) {
++                using PackedWS =
++                    WorkspaceSizes<CHUNK, D>;
++
++                char* packed_src =
++                    ws_raw.packed_base +
++                    int64_t(ws_idx) *
++                    PackedWS::kPerTile;
++
++                cute::SM90_BULK_COPY_G2S::copy(
++                    reinterpret_cast<BF16*>(
++                        packed_src),
++                    reinterpret_cast<uint64_t*>(
++                        tma_barrier),
++                    shared_storage
++                        .input[stage]
++                        .k_decayed
++                        .begin(),
++                    int32_t(PackedWS::kPerTile));
++            } else {
++                cute::SM90_BULK_COPY_G2S::copy(
++                    ws_raw.k_decayed + int64_t(ws_idx) * (CHUNK * D),
++                    reinterpret_cast<uint64_t*>(tma_barrier),
++                    shared_storage.input[stage].k_decayed.begin(),
++                    int32_t(CHUNK * D * sizeof(BF16)));
++
++                cute::SM90_BULK_COPY_G2S::copy(
++                    ws_raw.q_decayed + int64_t(ws_idx) * (CHUNK * D),
++                    reinterpret_cast<uint64_t*>(tma_barrier),
++                    shared_storage.input[stage].q_decayed.begin(),
++                    int32_t(CHUNK * D * sizeof(BF16)));
++
++                cute::SM90_BULK_COPY_G2S::copy(
++                    ws_raw.k_restored + int64_t(ws_idx) * (CHUNK * D),
++                    reinterpret_cast<uint64_t*>(tma_barrier),
++                    shared_storage.input[stage].k_restored.begin(),
++                    int32_t(CHUNK * D * sizeof(BF16)));
++
++                cute::SM90_BULK_COPY_G2S::copy(
++                    ws_raw.g_total + int64_t(ws_idx) * D,
++                    reinterpret_cast<uint64_t*>(tma_barrier),
++                    shared_storage.input[stage].g_total.begin(),
++                    int32_t(D * sizeof(float)));
++
++                cute::SM90_BULK_COPY_G2S::copy(
++                    ws_raw.inv + int64_t(ws_idx) * (CHUNK * CHUNK),
++                    reinterpret_cast<uint64_t*>(tma_barrier),
++                    shared_storage.input[stage].INV.begin(),
++                    int32_t(CHUNK * CHUNK * sizeof(BF16)));
++
++                cute::SM90_BULK_COPY_G2S::copy(
++                    ws_raw.mqk + int64_t(ws_idx) * (CHUNK * CHUNK),
++                    reinterpret_cast<uint64_t*>(tma_barrier),
++                    shared_storage.input[stage].Mqk.begin(),
++                    int32_t(CHUNK * CHUNK * sizeof(BF16)));
++            }
+ 
+             ++load_write;
+         }
+@@ -1425,41 +1446,62 @@ __global__ void __launch_bounds__(NumThreads, 1) _flash_kda_fwd_recurrence_bf16(
+             // shared-memory layouts and attach all copies to the same
+             // PipelineTmaAsync transaction barrier.
+ 
+-            cute::SM90_BULK_COPY_G2S::copy(
+-                ws_raw.k_decayed + int64_t(ws_idx) * (CHUNK * D),
+-                reinterpret_cast<uint64_t*>(tma_barrier),
+-                shared_storage.input[stage].k_decayed.begin(),
+-                int32_t(CHUNK * D * sizeof(BF16)));
+-
+-            cute::SM90_BULK_COPY_G2S::copy(
+-                ws_raw.q_decayed + int64_t(ws_idx) * (CHUNK * D),
+-                reinterpret_cast<uint64_t*>(tma_barrier),
+-                shared_storage.input[stage].q_decayed.begin(),
+-                int32_t(CHUNK * D * sizeof(BF16)));
+-
+-            cute::SM90_BULK_COPY_G2S::copy(
+-                ws_raw.k_restored + int64_t(ws_idx) * (CHUNK * D),
+-                reinterpret_cast<uint64_t*>(tma_barrier),
+-                shared_storage.input[stage].k_restored.begin(),
+-                int32_t(CHUNK * D * sizeof(BF16)));
+-
+-            cute::SM90_BULK_COPY_G2S::copy(
+-                ws_raw.g_total + int64_t(ws_idx) * D,
+-                reinterpret_cast<uint64_t*>(tma_barrier),
+-                shared_storage.input[stage].g_total.begin(),
+-                int32_t(D * sizeof(float)));
+-
+-            cute::SM90_BULK_COPY_G2S::copy(
+-                ws_raw.inv + int64_t(ws_idx) * (CHUNK * CHUNK),
+-                reinterpret_cast<uint64_t*>(tma_barrier),
+-                shared_storage.input[stage].INV.begin(),
+-                int32_t(CHUNK * CHUNK * sizeof(BF16)));
+-
+-            cute::SM90_BULK_COPY_G2S::copy(
+-                ws_raw.mqk + int64_t(ws_idx) * (CHUNK * CHUNK),
+-                reinterpret_cast<uint64_t*>(tma_barrier),
+-                shared_storage.input[stage].Mqk.begin(),
+-                int32_t(CHUNK * CHUNK * sizeof(BF16)));
++            if (ws_raw.packed_base != nullptr) {
++                using PackedWS =
++                    WorkspaceSizes<CHUNK, D>;
++
++                char* packed_src =
++                    ws_raw.packed_base +
++                    int64_t(ws_idx) *
++                    PackedWS::kPerTile;
++
++                cute::SM90_BULK_COPY_G2S::copy(
++                    reinterpret_cast<BF16*>(
++                        packed_src),
++                    reinterpret_cast<uint64_t*>(
++                        tma_barrier),
++                    shared_storage
++                        .input[stage]
++                        .k_decayed
++                        .begin(),
++                    int32_t(PackedWS::kPerTile));
++            } else {
++                cute::SM90_BULK_COPY_G2S::copy(
++                    ws_raw.k_decayed + int64_t(ws_idx) * (CHUNK * D),
++                    reinterpret_cast<uint64_t*>(tma_barrier),
++                    shared_storage.input[stage].k_decayed.begin(),
++                    int32_t(CHUNK * D * sizeof(BF16)));
++
++                cute::SM90_BULK_COPY_G2S::copy(
++                    ws_raw.q_decayed + int64_t(ws_idx) * (CHUNK * D),
++                    reinterpret_cast<uint64_t*>(tma_barrier),
++                    shared_storage.input[stage].q_decayed.begin(),
++                    int32_t(CHUNK * D * sizeof(BF16)));
++
++                cute::SM90_BULK_COPY_G2S::copy(
++                    ws_raw.k_restored + int64_t(ws_idx) * (CHUNK * D),
++                    reinterpret_cast<uint64_t*>(tma_barrier),
++                    shared_storage.input[stage].k_restored.begin(),
++                    int32_t(CHUNK * D * sizeof(BF16)));
++
++                cute::SM90_BULK_COPY_G2S::copy(
++                    ws_raw.g_total + int64_t(ws_idx) * D,
++                    reinterpret_cast<uint64_t*>(tma_barrier),
++                    shared_storage.input[stage].g_total.begin(),
++                    int32_t(D * sizeof(float)));
++
++                cute::SM90_BULK_COPY_G2S::copy(
++                    ws_raw.inv + int64_t(ws_idx) * (CHUNK * CHUNK),
++                    reinterpret_cast<uint64_t*>(tma_barrier),
++                    shared_storage.input[stage].INV.begin(),
++                    int32_t(CHUNK * CHUNK * sizeof(BF16)));
++
++                cute::SM90_BULK_COPY_G2S::copy(
++                    ws_raw.mqk + int64_t(ws_idx) * (CHUNK * CHUNK),
++                    reinterpret_cast<uint64_t*>(tma_barrier),
++                    shared_storage.input[stage].Mqk.begin(),
++                    int32_t(CHUNK * CHUNK * sizeof(BF16)));
++            }
+ 
+             ++load_write;
+         }
+@@ -2438,41 +2480,62 @@ __global__ void __launch_bounds__(NumThreads, 1) _flash_kda_fwd_recurrence(
+             // shared-memory layouts and attach all copies to the same
+             // PipelineTmaAsync transaction barrier.
+ 
+-            cute::SM90_BULK_COPY_G2S::copy(
+-                ws_raw.k_decayed + int64_t(ws_idx) * (CHUNK * D),
+-                reinterpret_cast<uint64_t*>(tma_barrier),
+-                shared_storage.input[stage].k_decayed.begin(),
+-                int32_t(CHUNK * D * sizeof(BF16)));
+-
+-            cute::SM90_BULK_COPY_G2S::copy(
+-                ws_raw.q_decayed + int64_t(ws_idx) * (CHUNK * D),
+-                reinterpret_cast<uint64_t*>(tma_barrier),
+-                shared_storage.input[stage].q_decayed.begin(),
+-                int32_t(CHUNK * D * sizeof(BF16)));
+-
+-            cute::SM90_BULK_COPY_G2S::copy(
+-                ws_raw.k_restored + int64_t(ws_idx) * (CHUNK * D),
+-                reinterpret_cast<uint64_t*>(tma_barrier),
+-                shared_storage.input[stage].k_restored.begin(),
+-                int32_t(CHUNK * D * sizeof(BF16)));
+-
+-            cute::SM90_BULK_COPY_G2S::copy(
+-                ws_raw.g_total + int64_t(ws_idx) * D,
+-                reinterpret_cast<uint64_t*>(tma_barrier),
+-                shared_storage.input[stage].g_total.begin(),
+-                int32_t(D * sizeof(float)));
+-
+-            cute::SM90_BULK_COPY_G2S::copy(
+-                ws_raw.inv + int64_t(ws_idx) * (CHUNK * CHUNK),
+-                reinterpret_cast<uint64_t*>(tma_barrier),
+-                shared_storage.input[stage].INV.begin(),
+-                int32_t(CHUNK * CHUNK * sizeof(BF16)));
+-
+-            cute::SM90_BULK_COPY_G2S::copy(
+-                ws_raw.mqk + int64_t(ws_idx) * (CHUNK * CHUNK),
+-                reinterpret_cast<uint64_t*>(tma_barrier),
+-                shared_storage.input[stage].Mqk.begin(),
+-                int32_t(CHUNK * CHUNK * sizeof(BF16)));
++            if (ws_raw.packed_base != nullptr) {
++                using PackedWS =
++                    WorkspaceSizes<CHUNK, D>;
++
++                char* packed_src =
++                    ws_raw.packed_base +
++                    int64_t(ws_idx) *
++                    PackedWS::kPerTile;
++
++                cute::SM90_BULK_COPY_G2S::copy(
++                    reinterpret_cast<BF16*>(
++                        packed_src),
++                    reinterpret_cast<uint64_t*>(
++                        tma_barrier),
++                    shared_storage
++                        .input[stage]
++                        .k_decayed
++                        .begin(),
++                    int32_t(PackedWS::kPerTile));
++            } else {
++                cute::SM90_BULK_COPY_G2S::copy(
++                    ws_raw.k_decayed + int64_t(ws_idx) * (CHUNK * D),
++                    reinterpret_cast<uint64_t*>(tma_barrier),
++                    shared_storage.input[stage].k_decayed.begin(),
++                    int32_t(CHUNK * D * sizeof(BF16)));
++
++                cute::SM90_BULK_COPY_G2S::copy(
++                    ws_raw.q_decayed + int64_t(ws_idx) * (CHUNK * D),
++                    reinterpret_cast<uint64_t*>(tma_barrier),
++                    shared_storage.input[stage].q_decayed.begin(),
++                    int32_t(CHUNK * D * sizeof(BF16)));
++
++                cute::SM90_BULK_COPY_G2S::copy(
++                    ws_raw.k_restored + int64_t(ws_idx) * (CHUNK * D),
++                    reinterpret_cast<uint64_t*>(tma_barrier),
++                    shared_storage.input[stage].k_restored.begin(),
++                    int32_t(CHUNK * D * sizeof(BF16)));
++
++                cute::SM90_BULK_COPY_G2S::copy(
++                    ws_raw.g_total + int64_t(ws_idx) * D,
++                    reinterpret_cast<uint64_t*>(tma_barrier),
++                    shared_storage.input[stage].g_total.begin(),
++                    int32_t(D * sizeof(float)));
++
++                cute::SM90_BULK_COPY_G2S::copy(
++                    ws_raw.inv + int64_t(ws_idx) * (CHUNK * CHUNK),
++                    reinterpret_cast<uint64_t*>(tma_barrier),
++                    shared_storage.input[stage].INV.begin(),
++                    int32_t(CHUNK * CHUNK * sizeof(BF16)));
++
++                cute::SM90_BULK_COPY_G2S::copy(
++                    ws_raw.mqk + int64_t(ws_idx) * (CHUNK * CHUNK),
++                    reinterpret_cast<uint64_t*>(tma_barrier),
++                    shared_storage.input[stage].Mqk.begin(),
++                    int32_t(CHUNK * CHUNK * sizeof(BF16)));
++            }
+ 
+             ++load_write;
+         }
+diff --git a/csrc/smxx/fwd_launch.cu b/csrc/smxx/fwd_launch.cu
+index c45f829..8cc8ccc 100644
+--- a/csrc/smxx/fwd_launch.cu
++++ b/csrc/smxx/fwd_launch.cu
+@@ -127,6 +127,23 @@ void launch_fwd(
+         ws_mqk
+     };
+ 
++    if constexpr (IsVarlen) {
++        const char* packed_env =
++            std::getenv(
++                "FLASH_KDA_UNIFORM_H96_PACKED_WORKSPACE");
++
++        if (
++            packed_env != nullptr &&
++            std::atoi(packed_env) != 0 &&
++            N == 8 &&
++            T_total == 8192 &&
++            H == 96 &&
++            D == 128
++        ) {
++            ws_raw.packed_base = ws;
++        }
++    }
++
+     int* ws_tile_prefix = reinterpret_cast<int*>(ws + n_ht * WS::kPerTile);
+ 
+     int64_t tile_prefix_bytes =
+diff --git a/csrc/smxx/utils.cuh b/csrc/smxx/utils.cuh
+index 301089b..f9d409f 100644
+--- a/csrc/smxx/utils.cuh
++++ b/csrc/smxx/utils.cuh
+@@ -85,6 +85,10 @@ struct K1WorkspaceRawPointers {
+     float* g_total = nullptr;
+     cutlass::bfloat16_t* inv = nullptr;
+     cutlass::bfloat16_t* mqk = nullptr;
++
++    // Optional per-tile packed workspace base.
++    // nullptr preserves the established SoA layout.
++    char* packed_base = nullptr;
+ };
+ 
+ 

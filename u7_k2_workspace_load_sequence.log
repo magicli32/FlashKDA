@@ -1,0 +1,71 @@
+            int beta_aligned = beta_linear & ~7;
+            auto beta_off = g_beta.layout()(beta_aligned);
+            Tensor g_beta_tile = make_tensor(g_beta.data() + beta_off, BetaSmemLayout{});
+            Tensor s_beta_tile = make_tensor(make_smem_ptr(shared_storage.input[stage].beta.begin()), TMABetaSmemLayout{});
+            cute::copy(tma_load_beta.with(*tma_barrier),
+                cta_tma_load_beta.partition_S(g_beta_tile), cta_tma_load_beta.partition_D(s_beta_tile));
+
+#if BLOCK_LEVEL_K1 >= 0
+            // v and beta do not depend on K1. They have already been issued
+            // before waiting for the corresponding workspace tile.
+            cuda::atomic_ref<uint32_t, cuda::thread_scope_device>
+                ready_ref(ws_ready[ws_idx]);
+
+            while (ready_ref.load(cuda::memory_order_acquire) == 0u) {
+                __nanosleep(64);
+            }
+
+            // The readiness flag is observed by the generic proxy while the
+            // following workspace reads are issued through the TMA async proxy.
+            asm volatile("fence.proxy.async.global;" ::: "memory");
+#endif
+
+            // P1-B:
+            // K1 stored the exact shared-memory byte images.
+            // Restore those byte images directly into the matching K2
+            // shared-memory layouts and attach all copies to the same
+            // PipelineTmaAsync transaction barrier.
+
+            cute::SM90_BULK_COPY_G2S::copy(
+                ws_raw.k_decayed + int64_t(ws_idx) * (CHUNK * D),
+                reinterpret_cast<uint64_t*>(tma_barrier),
+                shared_storage.input[stage].k_decayed.begin(),
+                int32_t(CHUNK * D * sizeof(BF16)));
+
+            cute::SM90_BULK_COPY_G2S::copy(
+                ws_raw.q_decayed + int64_t(ws_idx) * (CHUNK * D),
+                reinterpret_cast<uint64_t*>(tma_barrier),
+                shared_storage.input[stage].q_decayed.begin(),
+                int32_t(CHUNK * D * sizeof(BF16)));
+
+            cute::SM90_BULK_COPY_G2S::copy(
+                ws_raw.k_restored + int64_t(ws_idx) * (CHUNK * D),
+                reinterpret_cast<uint64_t*>(tma_barrier),
+                shared_storage.input[stage].k_restored.begin(),
+                int32_t(CHUNK * D * sizeof(BF16)));
+
+            cute::SM90_BULK_COPY_G2S::copy(
+                ws_raw.g_total + int64_t(ws_idx) * D,
+                reinterpret_cast<uint64_t*>(tma_barrier),
+                shared_storage.input[stage].g_total.begin(),
+                int32_t(D * sizeof(float)));
+
+            cute::SM90_BULK_COPY_G2S::copy(
+                ws_raw.inv + int64_t(ws_idx) * (CHUNK * CHUNK),
+                reinterpret_cast<uint64_t*>(tma_barrier),
+                shared_storage.input[stage].INV.begin(),
+                int32_t(CHUNK * CHUNK * sizeof(BF16)));
+
+            cute::SM90_BULK_COPY_G2S::copy(
+                ws_raw.mqk + int64_t(ws_idx) * (CHUNK * CHUNK),
+                reinterpret_cast<uint64_t*>(tma_barrier),
+                shared_storage.input[stage].Mqk.begin(),
+                int32_t(CHUNK * CHUNK * sizeof(BF16)));
+
+            ++load_write;
+        }
+        load_pipeline.producer_tail(load_write);
+    }
+#endif
+
+    // --- MMA warps

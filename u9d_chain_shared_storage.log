@@ -1,0 +1,68 @@
+// Per-kernel smem structs: bodies take them BY REFERENCE so the fused
+// dispatcher can union them in one pool (nvcc SUMS per-function static variables).
+struct K1Smem {
+  bf16 sgb[2][BT][K];  // [chunk-pair slot]: c+1's bf16 gates stage via
+                       // cp.async during c's compute phases
+  float sgc[BT][K];    // P2a output: this chunk's fp32 gate cumsum
+  float sA[BT][BT];
+  float sU[BT][2 * K + 4];
+  float sb[BT];
+  union SPool {
+    struct {
+      bf16 kw[BT][K + 8];
+      bf16 qw[BT][K + 8];
+      bf16 kz[10][16][K + 8];
+    } a;
+    struct {
+      __align__(1024) bf16 kdT[K][64];
+      __align__(1024) bf16 pTt[K][64];
+      __align__(1024) bf16 u0Th[K][64];
+      __align__(1024) bf16 u0Tl[K][64];
+    } b;
+    struct {
+      __align__(1024) float sLt[16][128][8];
+    } g;  // compose B:
+          // fp32 L as SWZ32 k-major K=8 chunks (tf32 smem descs)
+    struct {
+      bf16 aC_h[BT][56];
+      bf16 aC_l[BT][56];  // A cols<48 hi/lo
+      bf16 upT_h[2 * K][56];
+      bf16 upT_l[2 * K][56];
+    } f;
+  } sp;
+  uint64_t mb_f;
+  uint32_t s_taddr;
+};
+struct ChainSmem {
+  __align__(1024) bf16 sPneg[2][2][64][64];  // [buf][ktile]
+  __align__(1024) bf16 sKdT[2][128][64];
+  __align__(1024) bf16 sQd[2][2][64][64];
+  __align__(1024) bf16 sAh[2][64][64];
+  __align__(1024) bf16 sAl[2][64][64];
+  // u0 chunk tile via TMA riding mb_tma (measured: this stage was memory-
+  // latency-bound on u0's 16 fp32 LDGs — a 100MB L2-spilling stream)
+  __align__(1024) float sU0[2][BT][K];
+  // mb_pre/mb_preC: prefix L/c TMA; mb_cmL/mb_cmC: prefix mma-batch commits
+  uint64_t mb_tma, mb_p1, mb_p2, mb_o, mb_pre, mb_preC, mb_cmL, mb_cmC;
+  uint32_t s_taddr;
+};
+
+// ---------------- RAW input transforms (the fused pre-pass) ----------------
+// Two INDEPENDENT conventions, one per fla flag: RAW (q/k arrive
+// un-normalized) folds fla's l2norm_fwd(q)/l2norm_fwd(k), BSIG (beta arrives
+// as logits) folds its sigmoid(beta) — the caller's separate pre-pass launches
+// — into the tiles k1 already loads. Both transforms reproduce the pre-pass's
+// BYTES the way GM 1/2 reproduces its glog: fla's rstd is 1/sqrt(sum x^2 +
+// 1e-6) with round-to-nearest sqrt/reciprocal (NOT the fast-math rsqrt) over
+// an fp32 sum of bf16 squares, and its y lands in bf16, so every read
+// re-rounds.
+constexpr float L2_EPS = 1e-6f;  // fla.modules.l2norm.l2norm_fwd default
+
+// {k, q} row reciprocal norms for a chunk's 64 token rows, ONE pass for both
+// tensors: 512 threads = 8 lanes x 64 rows, 16 columns per lane (two 16 B
+// loads), closed by 3 shuffles (a row's lanes share a warp); lane
+// (tid & 7) == 0 publishes the row's pair to dst (the two rn sequences stay
+// inside that branch — 7 of 8 lanes would throw them away). Pad rows load
+// nothing and get rstd(0) — finite, and their values are selected to 0
+// downstream anyway.
+template <bool VL>

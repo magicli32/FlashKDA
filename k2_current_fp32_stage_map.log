@@ -1,0 +1,196 @@
+  2181	    class TmaLoadState,
+  2182	    class TmaStoreState,
+  2189	    bool HasStateIn = true,
+  2190	    bool HasStateOut = true,
+  2191	    bool StateFP32 = false,
+  2197	    CUTE_GRID_CONSTANT TmaLoadWsKD const tma_load_ws_kd,
+  2198	    CUTE_GRID_CONSTANT TmaLoadWsQD const tma_load_ws_qd,
+  2199	    CUTE_GRID_CONSTANT TmaLoadWsKR const tma_load_ws_kr,
+  2200	    CUTE_GRID_CONSTANT TmaLoadWsGT const tma_load_ws_gt,
+  2201	    CUTE_GRID_CONSTANT TmaLoadWsINV const tma_load_ws_inv,
+  2202	    CUTE_GRID_CONSTANT TmaLoadWsMqk const tma_load_ws_mqk,
+  2203	    CUTE_GRID_CONSTANT TmaLoadState const tma_load_initial_state,
+  2204	    CUTE_GRID_CONSTANT TmaStoreState const tma_store_final_state,
+  2210	    int final_state_N,
+  2224	    using StateSmemLayout = typename Layouts::StateSmemLayout;
+  2225	    using TransposedStateSmemLayout = typename Layouts::TransposedStateSmemLayout;
+  2230	    using TMAStateSmemLayout = typename Layouts::TMAStateSmemLayout;
+  2236	    // Transaction bytes: v + beta + k_decayed + q_decayed + k_restored + g_total + INV + Mqk
+  2240	        uint32_t(32) * uint32_t(sizeof(BF16)) +  // beta (bf16, sigmoid fused)
+  2241	        uint32_t(cute::cosize_v<MMALayout>) * uint32_t(sizeof(BF16)) * 3 +  // k_decayed, q_decayed, k_restored
+  2242	        uint32_t(cute::cosize_v<GTotalLayout>) * uint32_t(sizeof(float)) +    // g_total
+  2243	        uint32_t(cute::cosize_v<LMLayout>) * uint32_t(sizeof(BF16)) * 2 +    // INV, Mqk
+  2247	    // --- shared memory
+  2252	    // --- warp specialization
+  2254	    WarpRole warp_role = WarpRole::NonParticipant;
+  2256	        warp_role = WarpRole::MMA;
+  2258	        warp_role = WarpRole::LOAD_QKG;
+  2260	        warp_role = WarpRole::STORE;
+  2264	    using LoadPipelineState = cutlass::PipelineState<InputStages>;
+  2266	    LoadPipeline load_pipeline = make_load_pipeline<InputStages>(
+  2267	        shared_storage.load_pipeline,
+  2269	        warp_role, 1, kComputeThreads
+  2271	    using StorePipelineState = cutlass::PipelineState<OutputStages>;
+  2273	    StorePipeline store_pipeline = make_store_pipeline<OutputStages>(
+  2274	        shared_storage.store_pipeline,
+  2275	        warp_role, kComputeThreads, 1
+  2279	    // --- per-block sequence info
+  2288	        // Compute tile_base via linear scan (no host-precomputed table)
+  2290	        for (int i = 0; i < seq_idx; i++) {
+  2300	    int t_tiles  = (seq_len + CHUNK - 1) / CHUNK;
+  2303	    // --- Load initial state
+  2305	    if constexpr (HasStateIn && !StateFP32) {
+  2306	        // BF16 state: TMA load directly into state_acc
+  2307	        if (warp_role == WarpRole::LOAD_QKG && lane_predicate) {
+  2309	            constexpr uint32_t kStateTransactionBytes = cute::cosize_v<StateSmemLayout> * sizeof(BF16);
+  2311	            shared_storage.state_acc_tma_barrier.init(1);
+  2312	            cutlass::arch::fence_barrier_init();  // generic init -> visible to async proxy (TMA complete-tx)
+  2313	            shared_storage.state_acc_tma_barrier.arrive_and_expect_tx(kStateTransactionBytes);
+  2315	            Tensor g_init = tma_load_initial_state.get_tma_tensor(make_shape(N * H, D, D));
+  2319	            Tensor s_state = make_tensor(make_smem_ptr(shared_storage.state_acc.begin()), TMAStateSmemLayout{});
+  2321	            auto cta_tma_load_state = tma_load_initial_state.get_slice(Int<0>{});
+  2323	                tma_load_initial_state.with(reinterpret_cast<BarrierType&>(shared_storage.state_acc_tma_barrier)),
+  2324	                cta_tma_load_state.partition_S(g_init_tile),
+  2325	                cta_tma_load_state.partition_D(s_state)
+  2329	        shared_storage.state_acc_tma_barrier.wait(0);
+  2331	    } else if constexpr (HasStateIn && StateFP32) {
+  2332	        // FP32 state: TMA load fp32 into pipeline buffer, then convert to bf16 in state_acc
+  2333	        using FP32StateSmemLayout = typename Layouts::FP32StateSmemLayout;
+  2334	        using TMAFP32StateSmemLayout = typename Layouts::TMAFP32StateSmemLayout;
+  2336	        if (warp_role == WarpRole::LOAD_QKG && lane_predicate) {
+  2338	            constexpr uint32_t kFP32StateTransactionBytes = cute::cosize_v<StateSmemLayout> * sizeof(float);
+  2340	            shared_storage.state_acc_tma_barrier.init(1);
+  2341	            cutlass::arch::fence_barrier_init();  // generic init -> visible to async proxy (TMA complete-tx)
+  2342	            shared_storage.state_acc_tma_barrier.arrive_and_expect_tx(kFP32StateTransactionBytes);
+  2344	            Tensor g_init = tma_load_initial_state.get_tma_tensor(make_shape(N * H, D, D));
+  2349	                make_smem_ptr(reinterpret_cast<float*>(shared_storage.state_fp32_buf)),
+  2350	                TMAFP32StateSmemLayout{});
+  2352	            auto cta_tma_load_state = tma_load_initial_state.get_slice(Int<0>{});
+  2354	                tma_load_initial_state.with(reinterpret_cast<BarrierType&>(shared_storage.state_acc_tma_barrier)),
+  2355	                cta_tma_load_state.partition_S(g_init_tile),
+  2356	                cta_tma_load_state.partition_D(s_fp32)
+  2360	        shared_storage.state_acc_tma_barrier.wait(0);
+  2363	        // All threads: convert fp32 -> bf16 with layout transformation
+  2364	        smem_cvt_fp32_to_bf16<FP32StateSmemLayout, StateSmemLayout, D, NumThreads>(
+  2365	            reinterpret_cast<float*>(shared_storage.state_fp32_buf),
+  2366	            shared_storage.state_acc.begin(),
+  2370	        // No state in: zero-initialize state_acc
+  2372	            BF16* buf = shared_storage.state_acc.begin();
+  2373	            constexpr int kTotal = cute::cosize_v<StateSmemLayout>;
+  2374	            for (int i = threadIdx.x; i < kTotal; i += NumThreads) {
+  2378	        // generic writes -> visible to async proxy (TMA state store covers t_tiles==0)
+  2387	    // --- LOAD warp: issue TMA loads for v, beta, and workspace intermediates
+  2388	    if (warp_role == WarpRole::LOAD_QKG && lane_predicate) {
+  2392	        LoadPipelineState load_write = cutlass::make_producer_start_state<LoadPipeline>();
+  2396	        for (int t = 0; t < t_tiles; ++t) {
+  2397	            load_pipeline.producer_acquire(load_write);
+  2399	            LoadBarrierType* tma_barrier = load_pipeline.producer_get_barrier(load_write);
+  2403	            // TMA load v
+  2411	            // TMA load beta (1D)
+  2421	            // v and beta do not depend on K1. They have already been issued
+  2422	            // before waiting for the corresponding workspace tile.
+  2430	            // The readiness flag is observed by the generic proxy while the
+  2431	            // following workspace reads are issued through the TMA async proxy.
+  2435	            // P1-B:
+  2436	            // K1 stored the exact shared-memory byte images.
+  2437	            // Restore those byte images directly into the matching K2
+  2438	            // shared-memory layouts and attach all copies to the same
+  2439	            // PipelineTmaAsync transaction barrier.
+  2479	        load_pipeline.producer_tail(load_write);
+  2483	    // --- MMA warps
+  2484	    if (warp_role == WarpRole::MMA) {
+  2487	        LoadPipelineState load_read;
+  2488	        StorePipelineState out_write = cutlass::make_producer_start_state<StorePipeline>();
+  2492	        for (int t = 0; t < t_tiles; ++t) {
+  2494	            store_pipeline.producer_acquire(out_write);
+  2495	            load_pipeline.consumer_wait(load_read);
+  2515	            Tensor s_acc = make_tensor(make_smem_ptr(shared_storage.state_acc.begin()), StateSmemLayout{});
+  2516	            Tensor s_acc_T = make_tensor(make_smem_ptr(shared_storage.state_acc.begin()), TransposedStateSmemLayout{});
+  2518	            // Fused MMA: v_sub, v_beta, U=INV@v, out=q@s, out+=Mqk@U, s_acc_update
+  2519	            // Each warp handles TWO 16x16 column blocks (N=128 / 4 warps = 32 = 2 x 16)
+  2520	            // U stays in registers via SM75_U32x1_MOVM_T (no smem round-trip)
+  2526	            auto mma = make_tiled_mma(
+  2538	            // A copy: K_INTER → LDSM_N (for k_decayed, q_decayed, INV, Mqk)
+  2542	            // A copy: MN_INTER → LDSM_T (for k_restored_t in Phase 7)
+  2546	            // B copy: K_INTER → LDSM_N
+  2550	            // C load/store
+  2556	            // C load/store transposed (for Phase 6 state access via s_acc_T)
+  2585	            AccFragT u_acc[2], out_acc[2];
+  2587	            for (int i = 0; i < 2; ++i) { u_acc[i] = thr_mma.make_fragment_C(tCrC_ref); clear(u_acc[i]); }
+  2589	            for (int i = 0; i < 2; ++i) { out_acc[i] = thr_mma.make_fragment_C(tCrC_ref); clear(out_acc[i]); }
+  2591	            // ======== Phase 1: Dual GEMM k@s and q@s (k-loop, 2 blocks per warp) ========
+  2602	            for (int k = 0; k < K_BLOCKS; ++k) {
+  2610	                gemm(thr_mma, tCrA_k(_,_,Int<0>{}), tCrB(_,_,Int<0>{}), u_acc[0]);
+  2624	                gemm(thr_mma, tCrA_k(_,_,Int<0>{}), tCrB(_,_,Int<0>{}), u_acc[1]);
+  2628	            // ======== Phase 2: Cast out (keep in regs), load v/INV/beta ========
+  2631	            for (int i = 0; i < 2; ++i)
+  2636	            for (int i = 0; i < 2; ++i) {
+  2647	            // ======== Phase 3: u = (v - u) * beta; u = INV @ u (per block) ========
+  2652	            for (int i = 0; i < 2; ++i) {
+  2653	                cute::transform(u_acc[i], u_bf16[i], [] __device__ (float x) { return BF16(x); });
+  2656	                for (int a = 0; a < 2; ++a) {
+  2658	                    for (int d = 0; d < 2; ++d) {
+  2677	                clear(u_acc[i]);
+  2678	                gemm(thr_mma, tCrA_k(_,_,Int<0>{}), tCrB_u_tmp(_,_,Int<0>{}), u_acc[i]);
+  2680	                cute::transform(u_acc[i], u_bf16[i], [] __device__ (float x) { return BF16(x); });
+  2683	            // ======== Phase 4: Load Mqk, MOVM_T → tCrB_u_arr, Mqk@U + add out ========
+  2690	            for (int i = 0; i < 2; ++i) {
+  2710	            // ======== Phase 5: Store final out ========
+  2712	            for (int i = 0; i < 2; ++i) {
+  2717	            // ======== Phase 6: s_acc update ========
+  2718	            // s_acc[D, D] = s_acc * g_total + k_restored_t[D, 16] @ U[16, D]
+  2719	            // Each warp handles columns [warp_id*32, (warp_id+1)*32] = 2 x 16x16 blocks
+  2720	            // U is already in tCrB_u_arr[0..1] as B operands (from Phase 4 MOVM_T)
+  2731	            for (int i = 0; i < PREFETCH; ++i) {
+  2737	                for (int bi = 0; bi < 2; ++bi) {
+  2747	            for (int m = 0; m < S_M_BLOCKS; ++m) {
+  2754	                for (int bi = 0; bi < 2; ++bi) {
+  2755	                    clear(u_acc[bi]);
+  2756	                    gemm(thr_mma, ring_A_kr[slot](_,_,Int<0>{}), tCrB_u_arr[bi](_,_,Int<0>{}), u_acc[bi]);
+  2769	                for (int bi = 0; bi < 2; ++bi) {
+  2771	                    for (int a = 0; a < 2; ++a) {
+  2773	                        for (int d = 0; d < 2; ++d) {
+  2776	                            ring_S_acc[bi][slot](c0) = BF16(bf16_to_f32(ring_S_acc[bi][slot](c0)) * g0 + u_acc[bi](c0));
+  2777	                            ring_S_acc[bi][slot](c1) = BF16(bf16_to_f32(ring_S_acc[bi][slot](c1)) * g1 + u_acc[bi](c1));
+  2795	            store_pipeline.producer_commit(out_write);
+  2796	            load_pipeline.consumer_release(load_read);
+  2804	    if (warp_role == WarpRole::STORE && lane_predicate) {
+  2807	        StorePipelineState out_read;
+  2808	        for (int t = 0; t < t_tiles; ++t) {
+  2809	            store_pipeline.consumer_wait(out_read);
+  2816	                // Manual store for tail tile to avoid overwriting next sequence
+  2817	                // Only one thread (lane_predicate) runs here, so loop over all D
+  2819	                for (int row = 0; row < actual_len; ++row) {
+  2821	                    for (int col = 0; col < D; ++col) {
+  2826	                // TMA store for full tiles
+  2840	            store_pipeline.consumer_release(out_read);
+  2844	        if constexpr (HasStateOut && !StateFP32) {
+  2845	            // BF16 state: TMA store directly from state_acc
+  2846	            Tensor g_final = tma_store_final_state.get_tma_tensor(make_shape(N * H, D, D));
+  2847	            auto state_off = g_final.layout()(seq_idx * H + head_idx, 0, 0);
+  2848	            Tensor g_final_tile = make_tensor(g_final.data() + state_off,
+  2850	            Tensor s_state = make_tensor(make_smem_ptr(shared_storage.state_acc.begin()), TMAStateSmemLayout{});
+  2852	            auto cta_tma_store_state = tma_store_final_state.get_slice(Int<0>{});
+  2854	                tma_store_final_state,
+  2855	                cta_tma_store_state.partition_S(s_state),
+  2856	                cta_tma_store_state.partition_D(g_final_tile)
+  2862	    if constexpr (HasStateOut && StateFP32) {
+  2863	        // FP32 state: all threads sync, convert bf16->fp32, then STORE warp does TMA
+  2864	        using FP32StateSmemLayout = typename Layouts::FP32StateSmemLayout;
+  2865	        using TMAFP32StateSmemLayout = typename Layouts::TMAFP32StateSmemLayout;
+  2867	        __syncthreads();  // all warps sync — pipeline smem now free
+  2869	        smem_cvt_bf16_to_fp32<StateSmemLayout, FP32StateSmemLayout, D, NumThreads>(
+  2870	            shared_storage.state_acc.begin(),
+  2871	            reinterpret_cast<float*>(shared_storage.state_fp32_buf),
+  2873	        cutlass::arch::fence_view_async_shared();  // generic-proxy writes -> visible to async proxy (TMA)
+  2874	        __syncthreads();  // conversion complete
+  2876	        if (warp_role == WarpRole::STORE && lane_predicate) {
+  2877	            Tensor g_final = tma_store_final_state.get_tma_tensor(make_shape(N * H, D, D));
+  2878	            auto state_off = g_final.layout()(seq_idx * H + head_idx, 0, 0);
+  2879	            Tensor g_final_tile = make_tensor(g_final.data() + state_off,
+  2882	                make_smem_ptr(reinterpret_cast<float*>(shared_storage.state_fp32_buf)),
+  2883	                TMAFP32StateSmemLayout{});
+  2885	            auto cta_tma_store_state = tma_store_final_state.get_slice(Int<0>{});
+  2887	                tma_store_final_state,
+  2888	                cta_tma_store_state.partition_S(s_fp32),
+  2889	                cta_tma_store_state.partition_D(g_final_tile)

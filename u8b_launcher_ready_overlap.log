@@ -1,0 +1,143 @@
+            correction_state_gmem_layout
+        );
+
+    auto tma_load_correction_state =
+        make_tma_copy(
+            SM90_TMA_LOAD{},
+            m_correction_state,
+            TMAFP32StateSmemLayout{}
+        );
+
+#if BLOCK_LEVEL_K1 >= 0
+    cudaMemsetAsync(ws_ready, 0, ready_bytes, stream);
+#endif
+
+    // ============================================================
+    // P0-B: experimental K1 producer / K2 consumer overlap.
+    //
+    // For now, enable it only for our primary fixed benchmark:
+    //   N=1, T=8192, H=96, D=128.
+    //
+    // All other shapes keep the original same-stream scheduling.
+    // ============================================================
+    bool use_k1k2_overlap = false;
+    cudaStream_t k1_stream = stream;
+    cudaStream_t k2_stream = stream;
+
+    cudaEvent_t producer_done_event = nullptr;
+    cudaEvent_t consumer_done_event = nullptr;
+
+#if BLOCK_LEVEL_K1 >= 0 && BLOCK_LEVEL_K2 >= 0
+    if constexpr (!IsVarlen) {
+        use_k1k2_overlap =
+            (N == 1 && T_total == 8192 && (H == 96 || H == 64));
+    }
+
+    // Benchmark/debug switch: allow the exact same binary to fall back
+    // to serial K1 -> K2 scheduling.
+    if (const char* env = std::getenv("FLASH_KDA_DISABLE_K1K2_OVERLAP")) {
+        if (std::atoi(env) != 0) {
+            use_k1k2_overlap = false;
+        }
+    }
+
+    if (use_k1k2_overlap) {
+        // Cached per-host-thread objects: avoid stream/event creation
+        // overhead on every ~1 ms forward call.
+        static thread_local cudaStream_t producer_stream = nullptr;
+        static thread_local cudaStream_t consumer_stream = nullptr;
+
+        static thread_local cudaEvent_t producer_start_event = nullptr;
+        static thread_local cudaEvent_t producer_done_event_tls = nullptr;
+        static thread_local cudaEvent_t consumer_done_event_tls = nullptr;
+
+        if (producer_stream == nullptr) {
+            int minPriority = 0;
+            int maxPriority = 0;
+
+            cudaDeviceGetStreamPriorityRange(
+                &minPriority,
+                &maxPriority
+            );
+
+            // K1 always stays at the lowest/default priority.
+            cudaStreamCreateWithPriority(
+                &producer_stream,
+                cudaStreamNonBlocking,
+                minPriority
+            );
+
+            // P0-F:
+            // Select K2 priority at runtime so the exact same binary can
+            // sweep the producer/consumer scheduling tradeoff.
+            int consumerPriority = maxPriority;
+
+            if (const char* env =
+                    std::getenv("FLASH_KDA_K2_PRIORITY")) {
+                consumerPriority = std::atoi(env);
+            }
+
+            // Clamp to the meaningful device range.
+            // On B300 measured range is [-5, 0].
+            if (consumerPriority < maxPriority) {
+                consumerPriority = maxPriority;
+            }
+            if (consumerPriority > minPriority) {
+                consumerPriority = minPriority;
+            }
+
+            cudaStreamCreateWithPriority(
+                &consumer_stream,
+                cudaStreamNonBlocking,
+                consumerPriority
+            );
+
+            cudaEventCreateWithFlags(
+                &producer_start_event,
+                cudaEventDisableTiming
+            );
+
+            cudaEventCreateWithFlags(
+                &producer_done_event_tls,
+                cudaEventDisableTiming
+            );
+
+            cudaEventCreateWithFlags(
+                &consumer_done_event_tls,
+                cudaEventDisableTiming
+            );
+        }
+
+        // Everything already queued on the PyTorch/current stream
+        // (including ready memset and upstream tensor producers)
+        // must become visible before K1 starts.
+        cudaEventRecord(producer_start_event, stream);
+        cudaStreamWaitEvent(
+            producer_stream,
+            producer_start_event,
+            0
+        );
+
+        cudaStreamWaitEvent(
+            consumer_stream,
+            producer_start_event,
+            0
+        );
+
+        k1_stream = producer_stream;
+        k2_stream = consumer_stream;
+
+        producer_done_event = producer_done_event_tls;
+        consumer_done_event = consumer_done_event_tls;
+    }
+#endif
+
+    // ===== Launch Kernel 1 (prepare) =====
+#if BLOCK_LEVEL_K1 >= 0
+    {
+        constexpr int kK1Threads = 256;
+        using SharedStorageK1T = SharedStorageK1<K1L>;
+        int smem_size_k1 = sizeof(SharedStorageK1T);
+
+        // P0-E: optional occupancy throttle for the K1 producer.
+        //

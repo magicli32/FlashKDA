@@ -1,0 +1,177 @@
+diff --git a/csrc/smxx/fwd_kernel2.cuh b/csrc/smxx/fwd_kernel2.cuh
+index f59d949..3b2f9bb 100644
+--- a/csrc/smxx/fwd_kernel2.cuh
++++ b/csrc/smxx/fwd_kernel2.cuh
+@@ -367,16 +367,30 @@ __global__ void __maxnreg__(120) _flash_kda_fwd_recurrence_bf16_shared(
+ #if BLOCK_LEVEL_K1 >= 0
+             // v and beta do not depend on K1. They have already been issued
+             // before waiting for the corresponding workspace tile.
+-            cuda::atomic_ref<uint32_t, cuda::thread_scope_device>
+-                ready_ref(ws_ready[ws_idx]);
++            // U8-A:
++            // A null pointer means K1 and K2 are stream-ordered.
++            // K1 has completed before this kernel starts, so no
++            // per-tile readiness acquire or proxy handoff is required.
++            if (ws_ready != nullptr) {
++                cuda::atomic_ref<
++                    uint32_t,
++                    cuda::thread_scope_device
++                > ready_ref(ws_ready[ws_idx]);
++
++                while (
++                    ready_ref.load(
++                        cuda::memory_order_acquire
++                    ) == 0u
++                ) {
++                    __nanosleep(64);
++                }
+ 
+-            while (ready_ref.load(cuda::memory_order_acquire) == 0u) {
+-                __nanosleep(64);
++                // Generic-proxy acquire -> async-proxy TMA reads.
++                asm volatile(
++                    "fence.proxy.async.global;"
++                    ::: "memory"
++                );
+             }
+-
+-            // The readiness flag is observed by the generic proxy while the
+-            // following workspace reads are issued through the TMA async proxy.
+-            asm volatile("fence.proxy.async.global;" ::: "memory");
+ #endif
+ 
+             // P1-B:
+@@ -1407,16 +1421,30 @@ __global__ void __launch_bounds__(NumThreads, 1) _flash_kda_fwd_recurrence_bf16(
+ #if BLOCK_LEVEL_K1 >= 0
+             // v and beta do not depend on K1. They have already been issued
+             // before waiting for the corresponding workspace tile.
+-            cuda::atomic_ref<uint32_t, cuda::thread_scope_device>
+-                ready_ref(ws_ready[ws_idx]);
++            // U8-A:
++            // A null pointer means K1 and K2 are stream-ordered.
++            // K1 has completed before this kernel starts, so no
++            // per-tile readiness acquire or proxy handoff is required.
++            if (ws_ready != nullptr) {
++                cuda::atomic_ref<
++                    uint32_t,
++                    cuda::thread_scope_device
++                > ready_ref(ws_ready[ws_idx]);
++
++                while (
++                    ready_ref.load(
++                        cuda::memory_order_acquire
++                    ) == 0u
++                ) {
++                    __nanosleep(64);
++                }
+ 
+-            while (ready_ref.load(cuda::memory_order_acquire) == 0u) {
+-                __nanosleep(64);
++                // Generic-proxy acquire -> async-proxy TMA reads.
++                asm volatile(
++                    "fence.proxy.async.global;"
++                    ::: "memory"
++                );
+             }
+-
+-            // The readiness flag is observed by the generic proxy while the
+-            // following workspace reads are issued through the TMA async proxy.
+-            asm volatile("fence.proxy.async.global;" ::: "memory");
+ #endif
+ 
+             // P1-B:
+@@ -2420,16 +2448,30 @@ __global__ void __launch_bounds__(NumThreads, 1) _flash_kda_fwd_recurrence(
+ #if BLOCK_LEVEL_K1 >= 0
+             // v and beta do not depend on K1. They have already been issued
+             // before waiting for the corresponding workspace tile.
+-            cuda::atomic_ref<uint32_t, cuda::thread_scope_device>
+-                ready_ref(ws_ready[ws_idx]);
++            // U8-A:
++            // A null pointer means K1 and K2 are stream-ordered.
++            // K1 has completed before this kernel starts, so no
++            // per-tile readiness acquire or proxy handoff is required.
++            if (ws_ready != nullptr) {
++                cuda::atomic_ref<
++                    uint32_t,
++                    cuda::thread_scope_device
++                > ready_ref(ws_ready[ws_idx]);
++
++                while (
++                    ready_ref.load(
++                        cuda::memory_order_acquire
++                    ) == 0u
++                ) {
++                    __nanosleep(64);
++                }
+ 
+-            while (ready_ref.load(cuda::memory_order_acquire) == 0u) {
+-                __nanosleep(64);
++                // Generic-proxy acquire -> async-proxy TMA reads.
++                asm volatile(
++                    "fence.proxy.async.global;"
++                    ::: "memory"
++                );
+             }
+-
+-            // The readiness flag is observed by the generic proxy while the
+-            // following workspace reads are issued through the TMA async proxy.
+-            asm volatile("fence.proxy.async.global;" ::: "memory");
+ #endif
+ 
+             // P1-B:
+diff --git a/csrc/smxx/fwd_launch.cu b/csrc/smxx/fwd_launch.cu
+index c45f829..2741f0f 100644
+--- a/csrc/smxx/fwd_launch.cu
++++ b/csrc/smxx/fwd_launch.cu
+@@ -542,6 +542,33 @@ void launch_fwd(
+         dim3 grid_k2(N, H);
+         dim3 block_k2(kK2Threads);
+ 
++        // U8-A diagnostic:
++        // Uniform H96 runs K1 and K2 serially on the caller stream.
++        // Passing nullptr removes the redundant per-tile readiness
++        // acquire and proxy fence from K2.
++        bool skip_uniform_h96_ready_wait = false;
++
++        if constexpr (IsVarlen) {
++            const char* skip_ready_env =
++                std::getenv(
++                    "FLASH_KDA_UNIFORM_H96_SKIP_READY_WAIT"
++                );
++
++            skip_uniform_h96_ready_wait =
++                skip_ready_env != nullptr &&
++                std::atoi(skip_ready_env) != 0 &&
++                !use_k1k2_overlap &&
++                N == 8 &&
++                T_total == 8192 &&
++                H == 96 &&
++                D == 128;
++        }
++
++        uint32_t* k2_ws_ready =
++            skip_uniform_h96_ready_wait
++                ? nullptr
++                : ws_ready;
++
+ 	        if constexpr (
+             !StateFP32 &&
+             HasStateIn &&
+@@ -572,7 +599,7 @@ void launch_fwd(
+                 final_state_N,
+                 cu_seqlens_ptr,
+                 total_tiles,
+-                ws_ready,
++                k2_ws_ready,
+                 ws_raw
+             );
+         } else {
+@@ -600,7 +627,7 @@ void launch_fwd(
+                 final_state_N,
+                 cu_seqlens_ptr,
+                 total_tiles,
+-                ws_ready,
++                k2_ws_ready,
+                 ws_raw
+             );
+         }

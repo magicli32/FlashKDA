@@ -1,0 +1,12 @@
+01 K1           dur_us= 283.815 regs=32 dynamic_smem_mb=0.021
+02 K2_resident  dur_us= 340.681 regs=166 dynamic_smem_mb=0.099
+03 K1           dur_us= 278.503 regs=32 dynamic_smem_mb=0.021
+04 K2_resident  dur_us= 338.889 regs=166 dynamic_smem_mb=0.099
+05 K1           dur_us= 277.895 regs=32 dynamic_smem_mb=0.021
+06 K2_shared    dur_us= 371.945 regs=118 dynamic_smem_mb=0.099
+07 K1           dur_us= 275.719 regs=32 dynamic_smem_mb=0.021
+08 K2_shared    dur_us= 371.722 regs=118 dynamic_smem_mb=0.099
+09 K1           dur_us= 280.296 regs=32 dynamic_smem_mb=0.021
+10 K2_generic   dur_us= 402.378 regs=118 dynamic_smem_mb=0.099
+11 K1           dur_us= 278.503 regs=32 dynamic_smem_mb=0.021
+12 K2_generic   dur_us= 402.346 regs=118 dynamic_smem_mb=0.099

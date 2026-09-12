@@ -1,0 +1,11 @@
+varlen shape=[8192,96,128] seq_lens=[1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024] warmup=0 iters=1 repeats=1
+  flash_kda (bf16 state) : mean=0.9908 ms, min=0.9908 ms, max=0.9908 ms
+  flash_kda (no state)   : mean=0.6580 ms, min=0.6580 ms, max=0.6580 ms
+  flash_kda (fp32 state) : mean=0.6855 ms, min=0.6855 ms, max=0.6855 ms
+  chunk_kda : mean=2.6070 ms, min=2.6070 ms, max=2.6070 ms
+  chunk_gated_delta_rule : mean=1.3959 ms, min=1.3959 ms, max=1.3959 ms
+Collecting data...
+Generating '/tmp/nsys-report-11ce.qdstrm'
+[1/1] [0%                          ] nsys_uniform_h96_u11e_q_pipeline.nsys-rep[1/1] [0%                          ] nsys_uniform_h96_u11e_q_pipeline.nsys-rep[1/1] [5%                          ] nsys_uniform_h96_u11e_q_pipeline.nsys-rep[1/1] [===========51%              ] nsys_uniform_h96_u11e_q_pipeline.nsys-rep[1/1] [========================97% ] nsys_uniform_h96_u11e_q_pipeline.nsys-rep[1/1] [========================98% ] nsys_uniform_h96_u11e_q_pipeline.nsys-rep[1/1] [========================99% ] nsys_uniform_h96_u11e_q_pipeline.nsys-rep[1/1] [========================100%] nsys_uniform_h96_u11e_q_pipeline.nsys-rep[1/1] [========================100%] nsys_uniform_h96_u11e_q_pipeline.nsys-rep
+Generated:
+	/home/lcpu/88934705/lish/FlashKDA-uniform-h96/nsys_uniform_h96_u11e_q_pipeline.nsys-rep

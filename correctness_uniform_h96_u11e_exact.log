@@ -1,0 +1,7 @@
+fwd signature: (q, k, v, g, beta, scale, out, A_log, dt_bias, lower_bound, initial_state=None, correction_state=None, final_state=None, cu_seqlens=None)
+uniform hint : False
+running U11-E OFF...
+running U11-E ON...
+output               equal=True mismatch=0 max_abs=0.0
+final state          equal=True mismatch=0 max_abs=0.0
+UNIFORM_H96_U11E_EXACT_MATCH=PASS

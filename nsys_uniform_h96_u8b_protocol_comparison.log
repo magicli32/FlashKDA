@@ -1,0 +1,36 @@
+===== nsys_uniform_h96_u8b_protocol_removed =====
+01 K1           dur_us= 254.050 grid=512x96 block=256 regs=32 stream=7
+02 K2_resident  dur_us= 338.595 grid=8x96 block=192 regs=166 stream=7
+03 K1           dur_us= 250.211 grid=512x96 block=256 regs=32 stream=7
+04 K2_resident  dur_us= 337.091 grid=8x96 block=192 regs=166 stream=7
+05 K1           dur_us= 250.882 grid=512x96 block=256 regs=32 stream=7
+06 K2_shared    dur_us= 369.892 grid=8x96 block=192 regs=118 stream=7
+07 K1           dur_us= 250.979 grid=512x96 block=256 regs=32 stream=7
+08 K2_shared    dur_us= 369.283 grid=8x96 block=192 regs=118 stream=7
+09 K1           dur_us= 252.706 grid=512x96 block=256 regs=32 stream=7
+10 K2_generic   dur_us= 399.524 grid=8x96 block=192 regs=118 stream=7
+11 K1           dur_us= 250.467 grid=512x96 block=256 regs=32 stream=7
+12 K2_generic   dur_us= 399.875 grid=8x96 block=192 regs=118 stream=7
+===== CUDA API MEMSET =====
+no cudaMemset API
+===== nsys_uniform_h96_u8b_full_protocol =====
+01 memset       dur_us=   1.376 grid=x block= regs= stream=7
+02 K1           dur_us= 279.395 grid=512x96 block=256 regs=32 stream=7
+03 K2_resident  dur_us= 340.195 grid=8x96 block=192 regs=166 stream=7
+04 memset       dur_us=   1.696 grid=x block= regs= stream=7
+05 K1           dur_us= 277.155 grid=512x96 block=256 regs=32 stream=7
+06 K2_resident  dur_us= 340.483 grid=8x96 block=192 regs=166 stream=7
+07 memset       dur_us=   1.408 grid=x block= regs= stream=7
+08 K1           dur_us= 272.803 grid=512x96 block=256 regs=32 stream=7
+09 K2_shared    dur_us= 371.428 grid=8x96 block=192 regs=118 stream=7
+10 memset       dur_us=   1.728 grid=x block= regs= stream=7
+11 K1           dur_us= 275.299 grid=512x96 block=256 regs=32 stream=7
+12 K2_shared    dur_us= 372.163 grid=8x96 block=192 regs=118 stream=7
+13 memset       dur_us=   1.728 grid=x block= regs= stream=7
+14 K1           dur_us= 280.419 grid=512x96 block=256 regs=32 stream=7
+15 K2_generic   dur_us= 402.243 grid=8x96 block=192 regs=118 stream=7
+16 memset       dur_us=   1.408 grid=x block= regs= stream=7
+17 K1           dur_us= 276.547 grid=512x96 block=256 regs=32 stream=7
+18 K2_generic   dur_us= 402.435 grid=8x96 block=192 regs=118 stream=7
+===== CUDA API MEMSET =====
+0.0,35029,6,5838.2,4295.0,3680,11260,3070.9,cudaMemsetAsync

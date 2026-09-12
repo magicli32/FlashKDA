@@ -1,0 +1,420 @@
+csrc/smxx/tcgen05_sm103_probe.cuh-151-__device__ __forceinline__ void
+csrc/smxx/tcgen05_sm103_probe.cuh-152-tcgen05_fence_after_thread_sync() {
+csrc/smxx/tcgen05_sm103_probe.cuh-153-#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ == 1030)
+csrc/smxx/tcgen05_sm103_probe.cuh-154-    asm volatile(
+csrc/smxx/tcgen05_sm103_probe.cuh-155-        "tcgen05.fence::after_thread_sync;"
+csrc/smxx/tcgen05_sm103_probe.cuh-156-    );
+csrc/smxx/tcgen05_sm103_probe.cuh-157-#endif
+csrc/smxx/tcgen05_sm103_probe.cuh-158-}
+csrc/smxx/tcgen05_sm103_probe.cuh-159-
+csrc/smxx/tcgen05_sm103_probe.cuh-160-template <typename T>
+csrc/smxx/tcgen05_sm103_probe.cuh-161-__device__ __forceinline__ uint32_t
+csrc/smxx/tcgen05_sm103_probe.cuh-162-to_shared(T* ptr) {
+csrc/smxx/tcgen05_sm103_probe.cuh-163-    return static_cast<uint32_t>(
+csrc/smxx/tcgen05_sm103_probe.cuh-164-        __cvta_generic_to_shared(ptr)
+csrc/smxx/tcgen05_sm103_probe.cuh-165-    );
+csrc/smxx/tcgen05_sm103_probe.cuh-166-}
+csrc/smxx/tcgen05_sm103_probe.cuh-167-
+csrc/smxx/tcgen05_sm103_probe.cuh-168-__device__ __forceinline__ void
+csrc/smxx/tcgen05_sm103_probe.cuh:169:mbar_init(
+csrc/smxx/tcgen05_sm103_probe.cuh-170-    uint64_t* barrier,
+csrc/smxx/tcgen05_sm103_probe.cuh-171-    uint32_t count
+csrc/smxx/tcgen05_sm103_probe.cuh-172-) {
+csrc/smxx/tcgen05_sm103_probe.cuh-173-#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ == 1030)
+csrc/smxx/tcgen05_sm103_probe.cuh-174-    asm volatile(
+csrc/smxx/tcgen05_sm103_probe.cuh-175-        "mbarrier.init.shared.b64 [%0], %1;"
+csrc/smxx/tcgen05_sm103_probe.cuh-176-        :
+csrc/smxx/tcgen05_sm103_probe.cuh-177-        : "r"(to_shared(barrier)),
+csrc/smxx/tcgen05_sm103_probe.cuh-178-          "r"(count)
+csrc/smxx/tcgen05_sm103_probe.cuh-179-    );
+csrc/smxx/tcgen05_sm103_probe.cuh-180-#else
+csrc/smxx/tcgen05_sm103_probe.cuh-181-    (void)barrier;
+csrc/smxx/tcgen05_sm103_probe.cuh-182-    (void)count;
+csrc/smxx/tcgen05_sm103_probe.cuh-183-#endif
+csrc/smxx/tcgen05_sm103_probe.cuh-184-}
+csrc/smxx/tcgen05_sm103_probe.cuh-185-
+csrc/smxx/tcgen05_sm103_probe.cuh-186-__device__ __forceinline__ void
+csrc/smxx/tcgen05_sm103_probe.cuh:187:mbar_wait_parity(
+csrc/smxx/tcgen05_sm103_probe.cuh-188-    uint64_t* barrier,
+csrc/smxx/tcgen05_sm103_probe.cuh-189-    uint32_t parity
+csrc/smxx/tcgen05_sm103_probe.cuh-190-) {
+csrc/smxx/tcgen05_sm103_probe.cuh-191-#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ == 1030)
+csrc/smxx/tcgen05_sm103_probe.cuh-192-    asm volatile(
+csrc/smxx/tcgen05_sm103_probe.cuh-193-        "{\n\t"
+csrc/smxx/tcgen05_sm103_probe.cuh-194-        ".reg .pred p;\n\t"
+csrc/smxx/tcgen05_sm103_probe.cuh-195-        "WAIT_%=: "
+csrc/smxx/tcgen05_sm103_probe.cuh-196-        "mbarrier.try_wait.parity.shared.b64 "
+csrc/smxx/tcgen05_sm103_probe.cuh-197-        "p, [%0], %1;\n\t"
+csrc/smxx/tcgen05_sm103_probe.cuh-198-        "@!p bra WAIT_%=;\n\t"
+csrc/smxx/tcgen05_sm103_probe.cuh-199-        "}\n"
+csrc/smxx/tcgen05_sm103_probe.cuh-200-        :
+csrc/smxx/tcgen05_sm103_probe.cuh-201-        : "r"(to_shared(barrier)),
+csrc/smxx/tcgen05_sm103_probe.cuh-202-          "r"(parity)
+csrc/smxx/tcgen05_sm103_probe.cuh-203-        : "memory"
+csrc/smxx/tcgen05_sm103_probe.cuh-204-    );
+csrc/smxx/tcgen05_sm103_probe.cuh-205-#else
+csrc/smxx/tcgen05_sm103_probe.cuh-206-    (void)barrier;
+csrc/smxx/tcgen05_sm103_probe.cuh-207-    (void)parity;
+csrc/smxx/tcgen05_sm103_probe.cuh-208-#endif
+csrc/smxx/tcgen05_sm103_probe.cuh-209-}
+csrc/smxx/tcgen05_sm103_probe.cuh-210-
+csrc/smxx/tcgen05_sm103_probe.cuh-211-__device__ __forceinline__ void
+csrc/smxx/tcgen05_sm103_probe.cuh:212:tcgen05_commit_arrive(
+csrc/smxx/tcgen05_sm103_probe.cuh-213-    uint64_t* barrier
+csrc/smxx/tcgen05_sm103_probe.cuh-214-) {
+csrc/smxx/tcgen05_sm103_probe.cuh-215-#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ == 1030)
+csrc/smxx/tcgen05_sm103_probe.cuh-216-    asm volatile(
+csrc/smxx/tcgen05_sm103_probe.cuh-217-        "tcgen05.commit.cta_group::1."
+csrc/smxx/tcgen05_sm103_probe.cuh-218-        "mbarrier::arrive::one.b64 [%0];"
+csrc/smxx/tcgen05_sm103_probe.cuh-219-        :
+csrc/smxx/tcgen05_sm103_probe.cuh-220-        : "r"(to_shared(barrier))
+csrc/smxx/tcgen05_sm103_probe.cuh-221-    );
+csrc/smxx/tcgen05_sm103_probe.cuh-222-#else
+csrc/smxx/tcgen05_sm103_probe.cuh-223-    (void)barrier;
+csrc/smxx/tcgen05_sm103_probe.cuh-224-#endif
+csrc/smxx/tcgen05_sm103_probe.cuh-225-}
+csrc/smxx/tcgen05_sm103_probe.cuh-226-
+csrc/smxx/tcgen05_sm103_probe.cuh-227-__device__ __forceinline__ void
+csrc/smxx/tcgen05_sm103_probe.cuh-228-tcgen05_mma_f16(
+csrc/smxx/tcgen05_sm103_probe.cuh-229-    uint32_t d,
+csrc/smxx/tcgen05_sm103_probe.cuh-230-    uint64_t descriptor_a,
+--
+csrc/smxx/tcgen05_sm103_probe.cuh-600-    uint32_t taddr;
+csrc/smxx/tcgen05_sm103_probe.cuh-601-};
+csrc/smxx/tcgen05_sm103_probe.cuh-602-
+csrc/smxx/tcgen05_sm103_probe.cuh-603-// U9-C:
+csrc/smxx/tcgen05_sm103_probe.cuh-604-// A[128,64] and B^T[128,64] contain BF16 ones.
+csrc/smxx/tcgen05_sm103_probe.cuh-605-// A @ B therefore produces FP32 64.0 in every one of
+csrc/smxx/tcgen05_sm103_probe.cuh-606-// the 128x128 TMEM accumulator cells.
+csrc/smxx/tcgen05_sm103_probe.cuh-607-static __global__ void
+csrc/smxx/tcgen05_sm103_probe.cuh-608-__launch_bounds__(128, 1)
+csrc/smxx/tcgen05_sm103_probe.cuh-609-_flash_kda_tmem_mma_probe() {
+csrc/smxx/tcgen05_sm103_probe.cuh-610-#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ == 1030)
+csrc/smxx/tcgen05_sm103_probe.cuh-611-    __shared__ TmemMmaProbeShared shared;
+csrc/smxx/tcgen05_sm103_probe.cuh-612-
+csrc/smxx/tcgen05_sm103_probe.cuh-613-    int tid = int(threadIdx.x);
+csrc/smxx/tcgen05_sm103_probe.cuh-614-    int warp = tid >> 5;
+csrc/smxx/tcgen05_sm103_probe.cuh-615-    int band = (warp & 3) * 32;
+csrc/smxx/tcgen05_sm103_probe.cuh-616-
+csrc/smxx/tcgen05_sm103_probe.cuh-617-    if (tid == 0) {
+csrc/smxx/tcgen05_sm103_probe.cuh:618:        mbar_init(
+csrc/smxx/tcgen05_sm103_probe.cuh-619-            &shared.mma_done,
+csrc/smxx/tcgen05_sm103_probe.cuh-620-            1
+csrc/smxx/tcgen05_sm103_probe.cuh-621-        );
+csrc/smxx/tcgen05_sm103_probe.cuh-622-    }
+csrc/smxx/tcgen05_sm103_probe.cuh-623-
+csrc/smxx/tcgen05_sm103_probe.cuh-624-    if (warp == 0) {
+csrc/smxx/tcgen05_sm103_probe.cuh-625-        tcgen05_alloc(
+csrc/smxx/tcgen05_sm103_probe.cuh-626-            to_shared(&shared.taddr),
+csrc/smxx/tcgen05_sm103_probe.cuh-627-            512
+csrc/smxx/tcgen05_sm103_probe.cuh-628-        );
+csrc/smxx/tcgen05_sm103_probe.cuh-629-    }
+csrc/smxx/tcgen05_sm103_probe.cuh-630-
+csrc/smxx/tcgen05_sm103_probe.cuh-631-    constexpr int kElements = 128 * 64;
+csrc/smxx/tcgen05_sm103_probe.cuh-632-
+csrc/smxx/tcgen05_sm103_probe.cuh-633-    for (
+csrc/smxx/tcgen05_sm103_probe.cuh-634-        int index = tid;
+csrc/smxx/tcgen05_sm103_probe.cuh-635-        index < kElements;
+csrc/smxx/tcgen05_sm103_probe.cuh-636-        index += int(blockDim.x)
+--
+csrc/smxx/tcgen05_sm103_probe.cuh-689-                    uint16_t,
+csrc/smxx/tcgen05_sm103_probe.cuh-690-                    64,
+csrc/smxx/tcgen05_sm103_probe.cuh-691-                    128
+csrc/smxx/tcgen05_sm103_probe.cuh-692-                >(
+csrc/smxx/tcgen05_sm103_probe.cuh-693-                    to_shared(
+csrc/smxx/tcgen05_sm103_probe.cuh-694-                        &shared.matrix_b[0][0]
+csrc/smxx/tcgen05_sm103_probe.cuh-695-                    ) + uint32_t(k16 * 32)
+csrc/smxx/tcgen05_sm103_probe.cuh-696-                );
+csrc/smxx/tcgen05_sm103_probe.cuh-697-
+csrc/smxx/tcgen05_sm103_probe.cuh-698-            tcgen05_mma_f16(
+csrc/smxx/tcgen05_sm103_probe.cuh-699-                allocated_taddr,
+csrc/smxx/tcgen05_sm103_probe.cuh-700-                descriptor_a,
+csrc/smxx/tcgen05_sm103_probe.cuh-701-                descriptor_b,
+csrc/smxx/tcgen05_sm103_probe.cuh-702-                instruction_descriptor,
+csrc/smxx/tcgen05_sm103_probe.cuh-703-                k16 == 0 ? 0u : 1u
+csrc/smxx/tcgen05_sm103_probe.cuh-704-            );
+csrc/smxx/tcgen05_sm103_probe.cuh-705-        }
+csrc/smxx/tcgen05_sm103_probe.cuh-706-
+csrc/smxx/tcgen05_sm103_probe.cuh:707:        tcgen05_commit_arrive(
+csrc/smxx/tcgen05_sm103_probe.cuh-708-            &shared.mma_done
+csrc/smxx/tcgen05_sm103_probe.cuh-709-        );
+csrc/smxx/tcgen05_sm103_probe.cuh-710-    }
+csrc/smxx/tcgen05_sm103_probe.cuh-711-
+csrc/smxx/tcgen05_sm103_probe.cuh:712:    mbar_wait_parity(
+csrc/smxx/tcgen05_sm103_probe.cuh-713-        &shared.mma_done,
+csrc/smxx/tcgen05_sm103_probe.cuh-714-        0
+csrc/smxx/tcgen05_sm103_probe.cuh-715-    );
+csrc/smxx/tcgen05_sm103_probe.cuh-716-
+csrc/smxx/tcgen05_sm103_probe.cuh-717-    tcgen05_fence_after_thread_sync();
+csrc/smxx/tcgen05_sm103_probe.cuh-718-
+csrc/smxx/tcgen05_sm103_probe.cuh-719-    uint32_t lane_hi =
+csrc/smxx/tcgen05_sm103_probe.cuh-720-        uint32_t(band) << 16;
+csrc/smxx/tcgen05_sm103_probe.cuh-721-
+csrc/smxx/tcgen05_sm103_probe.cuh-722-    constexpr uint32_t kExpected =
+csrc/smxx/tcgen05_sm103_probe.cuh-723-        0x42800000u;  // float(64.0)
+csrc/smxx/tcgen05_sm103_probe.cuh-724-
+csrc/smxx/tcgen05_sm103_probe.cuh-725-    bool mismatch = false;
+csrc/smxx/tcgen05_sm103_probe.cuh-726-
+csrc/smxx/tcgen05_sm103_probe.cuh-727-#pragma unroll 1
+csrc/smxx/tcgen05_sm103_probe.cuh-728-    for (int column = 0; column < 128; column += 8) {
+csrc/smxx/tcgen05_sm103_probe.cuh-729-        uint32_t result[8];
+csrc/smxx/tcgen05_sm103_probe.cuh-730-
+--
+csrc/smxx/tcgen05_sm103_probe.cuh-783-struct alignas(1024) TmemAtmemProbeSharedStorage {
+csrc/smxx/tcgen05_sm103_probe.cuh-784-    alignas(1024) __nv_bfloat16 matrix_b[2][64][64];
+csrc/smxx/tcgen05_sm103_probe.cuh-785-    alignas(8) uint64_t mma_barrier;
+csrc/smxx/tcgen05_sm103_probe.cuh-786-    uint32_t tmem_addr;
+csrc/smxx/tcgen05_sm103_probe.cuh-787-    uint32_t mismatch;
+csrc/smxx/tcgen05_sm103_probe.cuh-788-};
+csrc/smxx/tcgen05_sm103_probe.cuh-789-
+csrc/smxx/tcgen05_sm103_probe.cuh-790-__global__ void _flash_kda_tmem_atmem_probe() {
+csrc/smxx/tcgen05_sm103_probe.cuh-791-#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ == 1030)
+csrc/smxx/tcgen05_sm103_probe.cuh-792-    __shared__ TmemAtmemProbeSharedStorage shared;
+csrc/smxx/tcgen05_sm103_probe.cuh-793-
+csrc/smxx/tcgen05_sm103_probe.cuh-794-    int const tid = int(threadIdx.x);
+csrc/smxx/tcgen05_sm103_probe.cuh-795-    int const warp = tid >> 5;
+csrc/smxx/tcgen05_sm103_probe.cuh-796-    int const lane = tid & 31;
+csrc/smxx/tcgen05_sm103_probe.cuh-797-    int const band = (warp & 3) * 32;
+csrc/smxx/tcgen05_sm103_probe.cuh-798-    int const ch = warp >> 2;
+csrc/smxx/tcgen05_sm103_probe.cuh-799-
+csrc/smxx/tcgen05_sm103_probe.cuh-800-    if (tid == 0) {
+csrc/smxx/tcgen05_sm103_probe.cuh:801:        mbar_init(&shared.mma_barrier, 1);
+csrc/smxx/tcgen05_sm103_probe.cuh-802-        shared.mismatch = 0;
+csrc/smxx/tcgen05_sm103_probe.cuh-803-    }
+csrc/smxx/tcgen05_sm103_probe.cuh-804-
+csrc/smxx/tcgen05_sm103_probe.cuh-805-    // Two 64x64 K-major SWZ128 B tiles. Since every logical
+csrc/smxx/tcgen05_sm103_probe.cuh-806-    // value is one, the swizzled physical image is also all ones.
+csrc/smxx/tcgen05_sm103_probe.cuh-807-    auto* matrix_b =
+csrc/smxx/tcgen05_sm103_probe.cuh-808-        reinterpret_cast<__nv_bfloat16*>(
+csrc/smxx/tcgen05_sm103_probe.cuh-809-            &shared.matrix_b[0][0][0]
+csrc/smxx/tcgen05_sm103_probe.cuh-810-        );
+csrc/smxx/tcgen05_sm103_probe.cuh-811-
+csrc/smxx/tcgen05_sm103_probe.cuh-812-    for (int i = tid; i < 2 * 64 * 64; i += 512) {
+csrc/smxx/tcgen05_sm103_probe.cuh-813-        matrix_b[i] = __float2bfloat16(1.0f);
+csrc/smxx/tcgen05_sm103_probe.cuh-814-    }
+csrc/smxx/tcgen05_sm103_probe.cuh-815-
+csrc/smxx/tcgen05_sm103_probe.cuh-816-    // Allocation is a warp-level collective, matching SGLang.
+csrc/smxx/tcgen05_sm103_probe.cuh-817-    if (warp == 0) {
+csrc/smxx/tcgen05_sm103_probe.cuh-818-        tcgen05_alloc(
+csrc/smxx/tcgen05_sm103_probe.cuh-819-            to_shared(&shared.tmem_addr),
+--
+csrc/smxx/tcgen05_sm103_probe.cuh-889-            uint64_t const desc_b =
+csrc/smxx/tcgen05_sm103_probe.cuh-890-                mma_smem_desc_k_major<
+csrc/smxx/tcgen05_sm103_probe.cuh-891-                    uint16_t,
+csrc/smxx/tcgen05_sm103_probe.cuh-892-                    64,
+csrc/smxx/tcgen05_sm103_probe.cuh-893-                    128
+csrc/smxx/tcgen05_sm103_probe.cuh-894-                >(matrix_b_addr);
+csrc/smxx/tcgen05_sm103_probe.cuh-895-
+csrc/smxx/tcgen05_sm103_probe.cuh-896-            tcgen05_mma_f16_atmem(
+csrc/smxx/tcgen05_sm103_probe.cuh-897-                taddr,
+csrc/smxx/tcgen05_sm103_probe.cuh-898-                taddr
+csrc/smxx/tcgen05_sm103_probe.cuh-899-                    + 256u
+csrc/smxx/tcgen05_sm103_probe.cuh-900-                    + uint32_t(k16 * 8),
+csrc/smxx/tcgen05_sm103_probe.cuh-901-                desc_b,
+csrc/smxx/tcgen05_sm103_probe.cuh-902-                inst_desc,
+csrc/smxx/tcgen05_sm103_probe.cuh-903-                k16 != 0 ? 1u : 0u
+csrc/smxx/tcgen05_sm103_probe.cuh-904-            );
+csrc/smxx/tcgen05_sm103_probe.cuh-905-        }
+csrc/smxx/tcgen05_sm103_probe.cuh-906-
+csrc/smxx/tcgen05_sm103_probe.cuh:907:        tcgen05_commit_arrive(
+csrc/smxx/tcgen05_sm103_probe.cuh-908-            &shared.mma_barrier
+csrc/smxx/tcgen05_sm103_probe.cuh-909-        );
+csrc/smxx/tcgen05_sm103_probe.cuh-910-    }
+csrc/smxx/tcgen05_sm103_probe.cuh-911-
+csrc/smxx/tcgen05_sm103_probe.cuh:912:    mbar_wait_parity(
+csrc/smxx/tcgen05_sm103_probe.cuh-913-        &shared.mma_barrier,
+csrc/smxx/tcgen05_sm103_probe.cuh-914-        0
+csrc/smxx/tcgen05_sm103_probe.cuh-915-    );
+csrc/smxx/tcgen05_sm103_probe.cuh-916-
+csrc/smxx/tcgen05_sm103_probe.cuh-917-    tcgen05_fence_after_thread_sync();
+csrc/smxx/tcgen05_sm103_probe.cuh-918-
+csrc/smxx/tcgen05_sm103_probe.cuh-919-    // D is [128,64]. band selects a 32-row band and ch
+csrc/smxx/tcgen05_sm103_probe.cuh-920-    // selects one 16-column quarter.
+csrc/smxx/tcgen05_sm103_probe.cuh-921-    uint32_t result[16];
+csrc/smxx/tcgen05_sm103_probe.cuh-922-
+csrc/smxx/tcgen05_sm103_probe.cuh-923-    tcgen05_ld_32x32b_x16(
+csrc/smxx/tcgen05_sm103_probe.cuh-924-        taddr
+csrc/smxx/tcgen05_sm103_probe.cuh-925-            + lane_hi
+csrc/smxx/tcgen05_sm103_probe.cuh-926-            + uint32_t(ch * 16),
+csrc/smxx/tcgen05_sm103_probe.cuh-927-        result[0],
+csrc/smxx/tcgen05_sm103_probe.cuh-928-        result[1],
+csrc/smxx/tcgen05_sm103_probe.cuh-929-        result[2],
+csrc/smxx/tcgen05_sm103_probe.cuh-930-        result[3],
+--
+csrc/smxx/tcgen05_sm103_probe.cuh-988-// register -> packed TMEM-A mapping used by the SM103 K2 chain.
+csrc/smxx/tcgen05_sm103_probe.cuh-989-//
+csrc/smxx/tcgen05_sm103_probe.cuh-990-// B contains a unique positive finite BF16 bit pattern at every
+csrc/smxx/tcgen05_sm103_probe.cuh-991-// logical [K,N] coordinate. Therefore D=A@B must reproduce every
+csrc/smxx/tcgen05_sm103_probe.cuh-992-// B value bitwise. This detects row/column transposes, incorrect
+csrc/smxx/tcgen05_sm103_probe.cuh-993-// TMEM lane addresses, K-tile offsets and SWZ128 placement.
+csrc/smxx/tcgen05_sm103_probe.cuh-994-__global__ void _flash_kda_tmem_atmem_mapping_probe() {
+csrc/smxx/tcgen05_sm103_probe.cuh-995-#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ == 1030)
+csrc/smxx/tcgen05_sm103_probe.cuh-996-    __shared__ TmemAtmemProbeSharedStorage shared;
+csrc/smxx/tcgen05_sm103_probe.cuh-997-
+csrc/smxx/tcgen05_sm103_probe.cuh-998-    int const tid = int(threadIdx.x);
+csrc/smxx/tcgen05_sm103_probe.cuh-999-    int const warp = tid >> 5;
+csrc/smxx/tcgen05_sm103_probe.cuh-1000-    int const lane = tid & 31;
+csrc/smxx/tcgen05_sm103_probe.cuh-1001-    int const band = (warp & 3) * 32;
+csrc/smxx/tcgen05_sm103_probe.cuh-1002-    int const ch = warp >> 2;
+csrc/smxx/tcgen05_sm103_probe.cuh-1003-    int const vc = band + lane;
+csrc/smxx/tcgen05_sm103_probe.cuh-1004-
+csrc/smxx/tcgen05_sm103_probe.cuh-1005-    if (tid == 0) {
+csrc/smxx/tcgen05_sm103_probe.cuh:1006:        mbar_init(&shared.mma_barrier, 1);
+csrc/smxx/tcgen05_sm103_probe.cuh-1007-        shared.mismatch = 0;
+csrc/smxx/tcgen05_sm103_probe.cuh-1008-    }
+csrc/smxx/tcgen05_sm103_probe.cuh-1009-
+csrc/smxx/tcgen05_sm103_probe.cuh-1010-    // Logical B is [K=128, N=64].
+csrc/smxx/tcgen05_sm103_probe.cuh-1011-    //
+csrc/smxx/tcgen05_sm103_probe.cuh-1012-    // The physical shared-memory image is:
+csrc/smxx/tcgen05_sm103_probe.cuh-1013-    //   [K-tile][N][SWZ128(K-local)]
+csrc/smxx/tcgen05_sm103_probe.cuh-1014-    //
+csrc/smxx/tcgen05_sm103_probe.cuh-1015-    // Raw BF16 values cover 0x2000..0x3fff, so all 8192
+csrc/smxx/tcgen05_sm103_probe.cuh-1016-    // logical elements are distinct, finite and positive.
+csrc/smxx/tcgen05_sm103_probe.cuh-1017-    auto* matrix_b_raw =
+csrc/smxx/tcgen05_sm103_probe.cuh-1018-        reinterpret_cast<uint16_t*>(
+csrc/smxx/tcgen05_sm103_probe.cuh-1019-            &shared.matrix_b[0][0][0]
+csrc/smxx/tcgen05_sm103_probe.cuh-1020-        );
+csrc/smxx/tcgen05_sm103_probe.cuh-1021-
+csrc/smxx/tcgen05_sm103_probe.cuh-1022-    for (
+csrc/smxx/tcgen05_sm103_probe.cuh-1023-        int logical = tid;
+csrc/smxx/tcgen05_sm103_probe.cuh-1024-        logical < 128 * 64;
+--
+csrc/smxx/tcgen05_sm103_probe.cuh-1128-            uint64_t const desc_b =
+csrc/smxx/tcgen05_sm103_probe.cuh-1129-                mma_smem_desc_k_major<
+csrc/smxx/tcgen05_sm103_probe.cuh-1130-                    uint16_t,
+csrc/smxx/tcgen05_sm103_probe.cuh-1131-                    64,
+csrc/smxx/tcgen05_sm103_probe.cuh-1132-                    128
+csrc/smxx/tcgen05_sm103_probe.cuh-1133-                >(matrix_b_addr);
+csrc/smxx/tcgen05_sm103_probe.cuh-1134-
+csrc/smxx/tcgen05_sm103_probe.cuh-1135-            tcgen05_mma_f16_atmem(
+csrc/smxx/tcgen05_sm103_probe.cuh-1136-                taddr,
+csrc/smxx/tcgen05_sm103_probe.cuh-1137-                taddr
+csrc/smxx/tcgen05_sm103_probe.cuh-1138-                    + 256u
+csrc/smxx/tcgen05_sm103_probe.cuh-1139-                    + uint32_t(k16 * 8),
+csrc/smxx/tcgen05_sm103_probe.cuh-1140-                desc_b,
+csrc/smxx/tcgen05_sm103_probe.cuh-1141-                inst_desc,
+csrc/smxx/tcgen05_sm103_probe.cuh-1142-                k16 != 0 ? 1u : 0u
+csrc/smxx/tcgen05_sm103_probe.cuh-1143-            );
+csrc/smxx/tcgen05_sm103_probe.cuh-1144-        }
+csrc/smxx/tcgen05_sm103_probe.cuh-1145-
+csrc/smxx/tcgen05_sm103_probe.cuh:1146:        tcgen05_commit_arrive(
+csrc/smxx/tcgen05_sm103_probe.cuh-1147-            &shared.mma_barrier
+csrc/smxx/tcgen05_sm103_probe.cuh-1148-        );
+csrc/smxx/tcgen05_sm103_probe.cuh-1149-    }
+csrc/smxx/tcgen05_sm103_probe.cuh-1150-
+csrc/smxx/tcgen05_sm103_probe.cuh:1151:    mbar_wait_parity(
+csrc/smxx/tcgen05_sm103_probe.cuh-1152-        &shared.mma_barrier,
+csrc/smxx/tcgen05_sm103_probe.cuh-1153-        0
+csrc/smxx/tcgen05_sm103_probe.cuh-1154-    );
+csrc/smxx/tcgen05_sm103_probe.cuh-1155-
+csrc/smxx/tcgen05_sm103_probe.cuh-1156-    tcgen05_fence_after_thread_sync();
+csrc/smxx/tcgen05_sm103_probe.cuh-1157-
+csrc/smxx/tcgen05_sm103_probe.cuh-1158-    uint32_t result[16];
+csrc/smxx/tcgen05_sm103_probe.cuh-1159-
+csrc/smxx/tcgen05_sm103_probe.cuh-1160-    tcgen05_ld_32x32b_x16(
+csrc/smxx/tcgen05_sm103_probe.cuh-1161-        taddr
+csrc/smxx/tcgen05_sm103_probe.cuh-1162-            + lane_hi
+csrc/smxx/tcgen05_sm103_probe.cuh-1163-            + uint32_t(ch * 16),
+csrc/smxx/tcgen05_sm103_probe.cuh-1164-        result[0],
+csrc/smxx/tcgen05_sm103_probe.cuh-1165-        result[1],
+csrc/smxx/tcgen05_sm103_probe.cuh-1166-        result[2],
+csrc/smxx/tcgen05_sm103_probe.cuh-1167-        result[3],
+csrc/smxx/tcgen05_sm103_probe.cuh-1168-        result[4],
+csrc/smxx/tcgen05_sm103_probe.cuh-1169-        result[5],
+--
+csrc/smxx/tcgen05_sm103_probe.cuh-1281-        warp >> 2;
+csrc/smxx/tcgen05_sm103_probe.cuh-1282-
+csrc/smxx/tcgen05_sm103_probe.cuh-1283-    int const vc =
+csrc/smxx/tcgen05_sm103_probe.cuh-1284-        band + lane;
+csrc/smxx/tcgen05_sm103_probe.cuh-1285-
+csrc/smxx/tcgen05_sm103_probe.cuh-1286-    int const sequence =
+csrc/smxx/tcgen05_sm103_probe.cuh-1287-        int(blockIdx.x) / H;
+csrc/smxx/tcgen05_sm103_probe.cuh-1288-
+csrc/smxx/tcgen05_sm103_probe.cuh-1289-    int const head =
+csrc/smxx/tcgen05_sm103_probe.cuh-1290-        int(blockIdx.x) % H;
+csrc/smxx/tcgen05_sm103_probe.cuh-1291-
+csrc/smxx/tcgen05_sm103_probe.cuh-1292-    // Uniform H96 has 1024 tokens per sequence and
+csrc/smxx/tcgen05_sm103_probe.cuh-1293-    // CHUNK=16, therefore 64 workspace tiles/sequence.
+csrc/smxx/tcgen05_sm103_probe.cuh-1294-    int const ws_idx =
+csrc/smxx/tcgen05_sm103_probe.cuh-1295-        head * total_tiles
+csrc/smxx/tcgen05_sm103_probe.cuh-1296-        + sequence * 64;
+csrc/smxx/tcgen05_sm103_probe.cuh-1297-
+csrc/smxx/tcgen05_sm103_probe.cuh-1298-    if (tid == 0) {
+csrc/smxx/tcgen05_sm103_probe.cuh:1299:        mbar_init(
+csrc/smxx/tcgen05_sm103_probe.cuh-1300-            &shared.mma_barrier,
+csrc/smxx/tcgen05_sm103_probe.cuh-1301-            1
+csrc/smxx/tcgen05_sm103_probe.cuh-1302-        );
+csrc/smxx/tcgen05_sm103_probe.cuh-1303-
+csrc/smxx/tcgen05_sm103_probe.cuh-1304-        shared.mismatch = 0;
+csrc/smxx/tcgen05_sm103_probe.cuh-1305-    }
+csrc/smxx/tcgen05_sm103_probe.cuh-1306-
+csrc/smxx/tcgen05_sm103_probe.cuh-1307-    // Copy the exact 4096-byte workspace image.
+csrc/smxx/tcgen05_sm103_probe.cuh-1308-    // Each uint4 transfers 16 bytes; 256 vectors cover
+csrc/smxx/tcgen05_sm103_probe.cuh-1309-    // the complete q_decayed tile.
+csrc/smxx/tcgen05_sm103_probe.cuh-1310-    auto const* source =
+csrc/smxx/tcgen05_sm103_probe.cuh-1311-        reinterpret_cast<uint4 const*>(
+csrc/smxx/tcgen05_sm103_probe.cuh-1312-            reinterpret_cast<char const*>(
+csrc/smxx/tcgen05_sm103_probe.cuh-1313-                q_workspace
+csrc/smxx/tcgen05_sm103_probe.cuh-1314-            )
+csrc/smxx/tcgen05_sm103_probe.cuh-1315-            + size_t(ws_idx) * 4096u
+csrc/smxx/tcgen05_sm103_probe.cuh-1316-        );
+csrc/smxx/tcgen05_sm103_probe.cuh-1317-
+--
+csrc/smxx/tcgen05_sm103_probe.cuh-1425-            uint64_t const desc_b =
+csrc/smxx/tcgen05_sm103_probe.cuh-1426-                mma_smem_desc_k_major<
+csrc/smxx/tcgen05_sm103_probe.cuh-1427-                    uint16_t,
+csrc/smxx/tcgen05_sm103_probe.cuh-1428-                    64,
+csrc/smxx/tcgen05_sm103_probe.cuh-1429-                    128
+csrc/smxx/tcgen05_sm103_probe.cuh-1430-                >(matrix_b_addr);
+csrc/smxx/tcgen05_sm103_probe.cuh-1431-
+csrc/smxx/tcgen05_sm103_probe.cuh-1432-            tcgen05_mma_f16_atmem(
+csrc/smxx/tcgen05_sm103_probe.cuh-1433-                taddr,
+csrc/smxx/tcgen05_sm103_probe.cuh-1434-                taddr
+csrc/smxx/tcgen05_sm103_probe.cuh-1435-                    + 256u
+csrc/smxx/tcgen05_sm103_probe.cuh-1436-                    + uint32_t(k16 * 8),
+csrc/smxx/tcgen05_sm103_probe.cuh-1437-                desc_b,
+csrc/smxx/tcgen05_sm103_probe.cuh-1438-                inst_desc,
+csrc/smxx/tcgen05_sm103_probe.cuh-1439-                k16 != 0 ? 1u : 0u
+csrc/smxx/tcgen05_sm103_probe.cuh-1440-            );
+csrc/smxx/tcgen05_sm103_probe.cuh-1441-        }
+csrc/smxx/tcgen05_sm103_probe.cuh-1442-
+csrc/smxx/tcgen05_sm103_probe.cuh:1443:        tcgen05_commit_arrive(
+csrc/smxx/tcgen05_sm103_probe.cuh-1444-            &shared.mma_barrier
+csrc/smxx/tcgen05_sm103_probe.cuh-1445-        );
+csrc/smxx/tcgen05_sm103_probe.cuh-1446-    }
+csrc/smxx/tcgen05_sm103_probe.cuh-1447-
+csrc/smxx/tcgen05_sm103_probe.cuh:1448:    mbar_wait_parity(
+csrc/smxx/tcgen05_sm103_probe.cuh-1449-        &shared.mma_barrier,
+csrc/smxx/tcgen05_sm103_probe.cuh-1450-        0
+csrc/smxx/tcgen05_sm103_probe.cuh-1451-    );
+csrc/smxx/tcgen05_sm103_probe.cuh-1452-
+csrc/smxx/tcgen05_sm103_probe.cuh-1453-    tcgen05_fence_after_thread_sync();
+csrc/smxx/tcgen05_sm103_probe.cuh-1454-
+csrc/smxx/tcgen05_sm103_probe.cuh-1455-    bool local_mismatch = false;
+csrc/smxx/tcgen05_sm103_probe.cuh-1456-
+csrc/smxx/tcgen05_sm103_probe.cuh-1457-    // N=16, so only ch=0 owns valid output columns.
+csrc/smxx/tcgen05_sm103_probe.cuh-1458-    // Its four warps cover the four 32-row bands.
+csrc/smxx/tcgen05_sm103_probe.cuh-1459-    if (ch == 0) {
+csrc/smxx/tcgen05_sm103_probe.cuh-1460-        uint32_t result[16];
+csrc/smxx/tcgen05_sm103_probe.cuh-1461-
+csrc/smxx/tcgen05_sm103_probe.cuh-1462-        tcgen05_ld_32x32b_x16(
+csrc/smxx/tcgen05_sm103_probe.cuh-1463-            taddr
+csrc/smxx/tcgen05_sm103_probe.cuh-1464-                + lane_hi,
+csrc/smxx/tcgen05_sm103_probe.cuh-1465-            result[0],
+csrc/smxx/tcgen05_sm103_probe.cuh-1466-            result[1],
+--
+csrc/smxx/tcgen05_sm103_probe.cuh-1603-
+csrc/smxx/tcgen05_sm103_probe.cuh-1604-    int const sequence =
+csrc/smxx/tcgen05_sm103_probe.cuh-1605-        int(blockIdx.x) / H;
+csrc/smxx/tcgen05_sm103_probe.cuh-1606-
+csrc/smxx/tcgen05_sm103_probe.cuh-1607-    int const head =
+csrc/smxx/tcgen05_sm103_probe.cuh-1608-        int(blockIdx.x) % H;
+csrc/smxx/tcgen05_sm103_probe.cuh-1609-
+csrc/smxx/tcgen05_sm103_probe.cuh-1610-    size_t const matrix_offset =
+csrc/smxx/tcgen05_sm103_probe.cuh-1611-        size_t(sequence * H + head)
+csrc/smxx/tcgen05_sm103_probe.cuh-1612-        * size_t(128 * 128);
+csrc/smxx/tcgen05_sm103_probe.cuh-1613-
+csrc/smxx/tcgen05_sm103_probe.cuh-1614-    auto const* state =
+csrc/smxx/tcgen05_sm103_probe.cuh-1615-        reinterpret_cast<
+csrc/smxx/tcgen05_sm103_probe.cuh-1616-            cutlass::bfloat16_t const*
+csrc/smxx/tcgen05_sm103_probe.cuh-1617-        >(initial_state)

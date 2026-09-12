@@ -1,0 +1,85 @@
+#include "fwd.h"
+#include "fwd_kernel1.cuh"
+#include "fwd_kernel2.cuh"
+#include "fwd_state_only.cuh"
+
+#include <cstdlib>
+
+// ==================== launch_fwd ====================
+template <int D, bool HasStateIn, bool HasStateOut, bool StateFP32, bool IsVarlen>
+void launch_fwd(
+    cutlass::bfloat16_t const* q_ptr,
+    cutlass::bfloat16_t const* k_ptr,
+    cutlass::bfloat16_t const* v_ptr,
+    cutlass::bfloat16_t const* g_bf16_ptr,
+    cutlass::bfloat16_t const* beta_ptr,
+    void const* initial_state_ptr,
+    void const* correction_state_ptr,
+    float scale,
+    void* final_state_ptr,
+    cutlass::bfloat16_t* out_ptr,
+    void* workspace_ptr,
+    int total_tiles,
+    int T_total,
+    int H,
+    int N,
+    int64_t const* cu_seqlens_ptr,
+    float const* A_log_ptr,
+    float const* dt_bias_ptr,
+    float gate_scale,
+    cudaStream_t stream
+) {
+    using BF16 = cutlass::bfloat16_t;
+    constexpr int kInputStages = 3;
+    constexpr int kOutputStages = 2;
+    constexpr int CHUNK = 16;
+
+    using K1L = K1Layouts<D, CHUNK>;
+    using K2L = K2Layouts<D, CHUNK>;
+    using WS = WorkspaceSizes<CHUNK, D>;
+
+    // TMA layouts for Kernel 1
+    using TMAQKLayout = typename K1L::TMAQKLayout;
+    using TMAGLayout = typename K1L::TMAGLayout;
+    using TMABetaSmemLayout = typename K1L::TMABetaSmemLayout;
+    using TMAVOLayout = typename K1L::TMAVOLayout;
+    using TMALMLayout = typename K1L::TMALMLayout;
+    using TMAGTotalSmemLayout = typename K1L::TMAGTotalSmemLayout;
+
+    // TMA layouts for Kernel 2
+    using TMAStateSmemLayout = typename K2L::TMAStateSmemLayout;
+    using TMAFP32StateSmemLayout = typename K2L::TMAFP32StateSmemLayout;
+
+    // --- gmem layouts for original tensors
+    auto gmem_layout = make_layout(make_shape(H, T_total, D), make_stride(D, D * H, 1));
+    // 1D beta layout: [H*T] contiguous
+    auto beta_gmem_layout = make_layout(make_shape(H * T_total));
+        const char* direct_initial_env =
+        std::getenv("FLASHKDA_CP_DIRECT_INITIAL");
+
+    bool use_direct_initial =
+        direct_initial_env != nullptr &&
+        direct_initial_env[0] == '1' &&
+        correction_state_ptr != nullptr &&
+        IsVarlen &&
+        HasStateIn &&
+        HasStateOut &&
+        !StateFP32 &&
+        T_total == 8192 &&
+        H == 96 &&
+        N == 8;
+
+    int initial_state_N =
+        use_direct_initial ? 6 : N;
+
+        const char* direct_final_env =
+        std::getenv("FLASHKDA_CP_DIRECT_FINAL");
+
+    bool direct_final_store =
+        direct_final_env != nullptr &&
+        direct_final_env[0] == '1' &&
+        IsVarlen &&
+        HasStateIn &&
+        HasStateOut &&
+        !StateFP32 &&
+        T_total == 8192 &&

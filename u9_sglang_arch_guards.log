@@ -1,0 +1,97 @@
+35://   -O3 -std=c++20 -gencode arch=compute_103a,code=sm_103a -use_fast_math
+36://   -lineinfo, link -lcuda (cuTensorMapEncodeTiled). sm_103a (GB300) only.
+154:// ---- tcgen05 (TMEM lifecycle, ld/st, MMA, fences) ----
+155:static __device__ __forceinline__ void tcgen05_alloc(uint32_t smem_addr_for_taddr, uint32_t n_cols) {
+157:      "tcgen05.alloc.cta_group::1.sync.aligned.shared::cta.b32 [%0], %1;" ::"r"(smem_addr_for_taddr), "r"(n_cols));
+159:static __device__ __forceinline__ void tcgen05_dealloc(uint32_t taddr, uint32_t n_cols) {
+160:  asm volatile("tcgen05.dealloc.cta_group::1.sync.aligned.b32 %0, %1;" ::"r"(taddr), "r"(n_cols));
+162:static __device__ __forceinline__ void tcgen05_relinquish() {
+163:  asm volatile("tcgen05.relinquish_alloc_permit.cta_group::1.sync.aligned;");
+166:tcgen05_st_32x32b_x4(uint32_t taddr, uint32_t r0, uint32_t r1, uint32_t r2, uint32_t r3) {
+168:      "tcgen05.st.sync.aligned.32x32b.x4.b32 [%0], {%1, %2, %3, %4};" ::"r"(taddr), "r"(r0), "r"(r1), "r"(r2), "r"(r3));
+170:static __device__ __forceinline__ void tcgen05_st_32x32b_x8(
+181:      "tcgen05.st.sync.aligned.32x32b.x8.b32 [%0], "
+192:static __device__ __forceinline__ void tcgen05_st_32x32b_x16(uint32_t taddr, const uint32_t* r) {
+194:      "tcgen05.st.sync.aligned.32x32b.x16.b32 [%16], "
+214:static __device__ __forceinline__ void tcgen05_ld_32x32b_x8(
+225:      "tcgen05.ld.sync.aligned.32x32b.x8.b32 "
+230:static __device__ __forceinline__ void tcgen05_ld_32x32b_x16(
+249:      "tcgen05.ld.sync.aligned.32x32b.x16.b32 "
+270:static __device__ __forceinline__ void tcgen05_ld_32x32b_x32(uint32_t taddr, uint32_t* r) {
+272:      "tcgen05.ld.sync.aligned.32x32b.x32.b32 "
+311:static __device__ __forceinline__ void tcgen05_wait_ld() {
+312:  asm volatile("tcgen05.wait::ld.sync.aligned;" ::: "memory");
+314:static __device__ __forceinline__ void tcgen05_wait_st() {
+315:  asm volatile("tcgen05.wait::st.sync.aligned;" ::: "memory");
+317:static __device__ __forceinline__ void tcgen05_commit_arrive(uint64_t* bar) {
+318:  asm volatile("tcgen05.commit.cta_group::1.mbarrier::arrive::one.b64 [%0];" ::"r"(to_shared(bar)));
+320:static __device__ __forceinline__ void tcgen05_fence_before_thread_sync() {
+321:  asm volatile("tcgen05.fence::before_thread_sync;");
+323:static __device__ __forceinline__ void tcgen05_fence_after_thread_sync() {
+324:  asm volatile("tcgen05.fence::after_thread_sync;");
+327:tcgen05_mma_f16(uint32_t d, uint64_t desc_a, uint64_t desc_b, uint32_t inst_desc_high, uint32_t scale_c) {
+331:      "tcgen05.mma.cta_group::1.kind::f16 [%0], %1, %2, %3, p;\n\t}\n" ::"r"(d),
+339:tcgen05_mma_f16_atmem(uint32_t d, uint32_t a_tmem, uint64_t desc_b, uint32_t inst_desc_high, uint32_t scale_c) {
+343:      "tcgen05.mma.cta_group::1.kind::f16 [%0], [%1], %2, %3, p;\n\t}\n" ::"r"(d),
+461:      "tcgen05.mma.cta_group::1.kind::tf32 [%0], [%1], %2, %3, p;\n\t}\n" ::"r"(d),
+673:    if (warp == 0) ptx::tcgen05_alloc(ptx::to_shared(&s_taddr), 512);
+1115:    // The chunk's W/w0 products target the FREE pair; W alone is drained
+1155:    ptx::tcgen05_fence_before_thread_sync();
+1169:      ptx::tcgen05_fence_after_thread_sync();
+1176:        ptx::tcgen05_mma_f16(taddr + tp, da, db, idwm, k16 ? 1u : 0u);
+1186:          ptx::tcgen05_mma_f16(taddr + tp + 128u, da, db, idw, (half | k16) ? 1u : 0u);
+1188:      ptx::tcgen05_commit_arrive(&mb_f);
+1202:    ptx::tcgen05_fence_after_thread_sync();
+1211:      ptx::tcgen05_ld_32x32b_x8(
+1213:      ptx::tcgen05_wait_ld();
+1229:    ptx::tcgen05_fence_before_thread_sync();
+1237:          ptx::tcgen05_ld_32x32b_x8(
+1239:          ptx::tcgen05_wait_ld();
+1277:            ptx::tcgen05_st_32x32b_x4(
+1283:          ptx::tcgen05_wait_st();
+1302:          ptx::tcgen05_commit_arrive(&mb_f);
+1307:          ptx::tcgen05_fence_after_thread_sync();
+1320:    if (warp == 0) ptx::tcgen05_dealloc(s_taddr, 512);
+1321:    ptx::tcgen05_relinquish();
+1384:// ---------------- K2: tcgen05 chain (A-from-TMEM, B via TMA) --------------
+1458:  if (warp == 0) ptx::tcgen05_alloc(ptx::to_shared(&s_taddr), 512);
+1472:  // rides the mma pipe (a tcgen05.st into a region in-flight mmas
+1499:      ptx::tcgen05_st_32x32b_x4(taddr + lane_hi + uint32_t(256 + ch * 32 + c4), iv[0], iv[1], iv[2], iv[3]);
+1500:      ptx::tcgen05_st_32x32b_x4(taddr + lane_hi + uint32_t(ch * 32 + c4), sv[0], sv[1], sv[2], sv[3]);
+1502:    ptx::tcgen05_wait_st();
+1503:    ptx::tcgen05_fence_before_thread_sync();
+1527:      ptx::tcgen05_fence_before_thread_sync();
+1530:        ptx::tcgen05_fence_after_thread_sync();
+1539:        ptx::tcgen05_commit_arrive(&S.mb_cmL);
+1548:        ptx::tcgen05_commit_arrive(&S.mb_cmC);
+1554:    ptx::tcgen05_fence_after_thread_sync();
+1559:      ptx::tcgen05_ld_32x32b_x8(
+1561:      ptx::tcgen05_wait_ld();
+1618:      ptx::tcgen05_st_32x32b_x16(a1st, hw);
+1653:    ptx::tcgen05_wait_st();
+1654:    ptx::tcgen05_fence_before_thread_sync();
+1664:      ptx::tcgen05_fence_after_thread_sync();
+1672:          ptx::tcgen05_mma_f16_atmem(taddr, taddr + (256u + k16 * 8), db, idesc1, k16 ? 1u : 0u);
+1674:        ptx::tcgen05_commit_arrive(&mb_p1);
+1680:          ptx::tcgen05_mma_f16_atmem(taddr + 384u, taddr + (256u + k16 * 8), db, idesc1, k16 ? 1u : 0u);
+1682:        ptx::tcgen05_commit_arrive(&mb_o);
+1686:    ptx::tcgen05_fence_after_thread_sync();
+1693:        ptx::tcgen05_ld_32x32b_x16(
+1711:        ptx::tcgen05_wait_ld();
+1720:      ptx::tcgen05_st_32x32b_x8(
+1722:      ptx::tcgen05_st_32x32b_x8(
+1725:    ptx::tcgen05_wait_st();
+1726:    ptx::tcgen05_fence_before_thread_sync();
+1729:      ptx::tcgen05_fence_after_thread_sync();
+1738:            ptx::tcgen05_mma_f16_atmem(
+1741:        ptx::tcgen05_commit_arrive(&mb_p2);
+1752:            ptx::tcgen05_mma_f16_atmem(taddr + 384u, taddr + (acol + k16 * 8), db, idesc4, 1u);
+1755:        ptx::tcgen05_commit_arrive(&mb_o);
+1759:    ptx::tcgen05_fence_after_thread_sync();
+1764:      ptx::tcgen05_ld_32x32b_x32(taddr + lane_hi + uint32_t(64 + ch * 32), r);
+1765:      ptx::tcgen05_wait_ld();
+1772:    ptx::tcgen05_fence_after_thread_sync();
+1775:      ptx::tcgen05_ld_32x32b_x16(
+1793:      ptx::tcgen05_wait_ld();
+1811:  if (warp == 0) ptx::tcgen05_dealloc(taddr, 512);
+1812:  ptx::tcgen05_relinquish();

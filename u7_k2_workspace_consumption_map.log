@@ -1,0 +1,119 @@
+87:        alignas(128) cute::ArrayEngine<BF16, cute::cosize_v<MMALayout>> k_decayed;
+88:        alignas(128) cute::ArrayEngine<BF16, cute::cosize_v<MMALayout>> q_decayed;
+89:        alignas(128) cute::ArrayEngine<BF16, cute::cosize_v<MMALayout>> k_restored;
+90:        alignas(128) cute::ArrayEngine<float, cute::cosize_v<GTotalLayout>> g_total;
+144:    CUTE_GRID_CONSTANT TmaLoadWsKD const tma_load_ws_kd,
+145:    CUTE_GRID_CONSTANT TmaLoadWsQD const tma_load_ws_qd,
+146:    CUTE_GRID_CONSTANT TmaLoadWsKR const tma_load_ws_kr,
+147:    CUTE_GRID_CONSTANT TmaLoadWsGT const tma_load_ws_gt,
+148:    CUTE_GRID_CONSTANT TmaLoadWsINV const tma_load_ws_inv,
+149:    CUTE_GRID_CONSTANT TmaLoadWsMqk const tma_load_ws_mqk,
+183:    // Transaction bytes: v + beta + k_decayed + q_decayed + k_restored + g_total + INV + Mqk
+188:        uint32_t(cute::cosize_v<MMALayout>) * uint32_t(sizeof(BF16)) * 3 +  // k_decayed, q_decayed, k_restored
+189:        uint32_t(cute::cosize_v<GTotalLayout>) * uint32_t(sizeof(float)) +    // g_total
+389:                ws_raw.k_decayed + int64_t(ws_idx) * (CHUNK * D),
+391:                shared_storage.input[stage].k_decayed.begin(),
+395:                ws_raw.q_decayed + int64_t(ws_idx) * (CHUNK * D),
+397:                shared_storage.input[stage].q_decayed.begin(),
+401:                ws_raw.k_restored + int64_t(ws_idx) * (CHUNK * D),
+403:                shared_storage.input[stage].k_restored.begin(),
+407:                ws_raw.g_total + int64_t(ws_idx) * D,
+409:                shared_storage.input[stage].g_total.begin(),
+455:            Tensor k_decayed = make_tensor(make_smem_ptr(shared_storage.input[load_stage].k_decayed.begin()), MMALayout{});
+456:            Tensor q_decayed = make_tensor(make_smem_ptr(shared_storage.input[load_stage].q_decayed.begin()), MMALayout{});
+457:            Tensor k_restored = make_tensor(make_smem_ptr(shared_storage.input[load_stage].k_restored.begin()), MMALayout{});
+458:            Tensor g_total = make_tensor(make_smem_ptr(shared_storage.input[load_stage].g_total.begin()), GTotalLayout{});
+469:            Tensor k_restored_t = make_tensor(make_smem_ptr(shared_storage.input[load_stage].k_restored.begin()), TransposedMMALayout{});
+485:            // A copy: K_INTER → LDSM_N (for k_decayed, q_decayed, INV, Mqk)
+489:            // A copy: MN_INTER → LDSM_T (for k_restored_t in Phase 7)
+509:            Tensor A_ref = local_tile(k_decayed, make_shape(Int<16>{}, Int<16>{}), make_coord(0, 0));
+539:            constexpr int K_BLOCKS = decltype(cute::size<1>(k_decayed))::value / 16;
+542:                local_tile(k_decayed, make_shape(Int<16>{}, Int<16>{}), make_coord(0, 0))), tCrAi_k_view);
+544:                local_tile(q_decayed, make_shape(Int<16>{}, Int<16>{}), make_coord(0, 0))), tCrAi_q_view);
+564:                        local_tile(k_decayed, make_shape(Int<16>{}, Int<16>{}), make_coord(0, k + 1))), tCrAi_k_view);
+566:                        local_tile(q_decayed, make_shape(Int<16>{}, Int<16>{}), make_coord(0, k + 1))), tCrAi_q_view);
+665:            // s_acc[D, D] = s_acc * g_total + k_restored_t[D, 16] @ U[16, D]
+668:            constexpr int S_M_BLOCKS = decltype(cute::size<0>(k_restored_t))::value / 16;
+679:                Tensor kr_block = local_tile(k_restored_t, make_shape(Int<16>{}, Int<16>{}), make_coord(i, 0));
+689:                ring_g0[i] = g_total(i * 16 + group_id);
+690:                ring_g1[i] = g_total(i * 16 + group_id + 8);
+707:                    Tensor kr_next = local_tile(k_restored_t, make_shape(Int<16>{}, Int<16>{}), make_coord(m + PREFETCH, 0));
+711:                    ring_g0[slot] = g_total((m + PREFETCH) * 16 + group_id);
+712:                    ring_g1[slot] = g_total((m + PREFETCH) * 16 + group_id + 8);
+869:    CUTE_GRID_CONSTANT TmaLoadWsKD const tma_load_ws_kd,
+870:    CUTE_GRID_CONSTANT TmaLoadWsQD const tma_load_ws_qd,
+871:    CUTE_GRID_CONSTANT TmaLoadWsKR const tma_load_ws_kr,
+872:    CUTE_GRID_CONSTANT TmaLoadWsGT const tma_load_ws_gt,
+873:    CUTE_GRID_CONSTANT TmaLoadWsINV const tma_load_ws_inv,
+874:    CUTE_GRID_CONSTANT TmaLoadWsMqk const tma_load_ws_mqk,
+909:    // Transaction bytes: v + beta + k_decayed + q_decayed + k_restored + g_total + INV + Mqk
+914:        uint32_t(cute::cosize_v<MMALayout>) * uint32_t(sizeof(BF16)) * 3 +  // k_decayed, q_decayed, k_restored
+915:        uint32_t(cute::cosize_v<GTotalLayout>) * uint32_t(sizeof(float)) +    // g_total
+1429:                ws_raw.k_decayed + int64_t(ws_idx) * (CHUNK * D),
+1431:                shared_storage.input[stage].k_decayed.begin(),
+1435:                ws_raw.q_decayed + int64_t(ws_idx) * (CHUNK * D),
+1437:                shared_storage.input[stage].q_decayed.begin(),
+1441:                ws_raw.k_restored + int64_t(ws_idx) * (CHUNK * D),
+1443:                shared_storage.input[stage].k_restored.begin(),
+1447:                ws_raw.g_total + int64_t(ws_idx) * D,
+1449:                shared_storage.input[stage].g_total.begin(),
+1567:            Tensor k_decayed = make_tensor(make_smem_ptr(shared_storage.input[load_stage].k_decayed.begin()), MMALayout{});
+1568:            Tensor q_decayed = make_tensor(make_smem_ptr(shared_storage.input[load_stage].q_decayed.begin()), MMALayout{});
+1569:            Tensor k_restored = make_tensor(make_smem_ptr(shared_storage.input[load_stage].k_restored.begin()), MMALayout{});
+1570:            Tensor g_total = make_tensor(make_smem_ptr(shared_storage.input[load_stage].g_total.begin()), GTotalLayout{});
+1581:            Tensor k_restored_t = make_tensor(make_smem_ptr(shared_storage.input[load_stage].k_restored.begin()), TransposedMMALayout{});
+1597:            // A copy: K_INTER → LDSM_N (for k_decayed, q_decayed, INV, Mqk)
+1601:            // A copy: MN_INTER → LDSM_T (for k_restored_t in Phase 7)
+1621:            Tensor A_ref = local_tile(k_decayed, make_shape(Int<16>{}, Int<16>{}), make_coord(0, 0));
+1655:                decltype(cute::size<1>(k_decayed))::value / 16;
+1665:                        k_decayed,
+1674:                        q_decayed,
+1735:                                k_decayed,
+1746:                                q_decayed,
+1859:            //     resident_state * g_total
+1860:            //   + k_restored^T @ U
+1864:                decltype(cute::size<0>(k_restored_t))::value / 16;
+1884:                    k_restored_t,
+1899:                    g_total(i * 16 + group_id);
+1902:                    g_total(i * 16 + group_id + 8);
+1925:                        k_restored_t,
+1940:                        g_total(
+1945:                        g_total(
+2197:    CUTE_GRID_CONSTANT TmaLoadWsKD const tma_load_ws_kd,
+2198:    CUTE_GRID_CONSTANT TmaLoadWsQD const tma_load_ws_qd,
+2199:    CUTE_GRID_CONSTANT TmaLoadWsKR const tma_load_ws_kr,
+2200:    CUTE_GRID_CONSTANT TmaLoadWsGT const tma_load_ws_gt,
+2201:    CUTE_GRID_CONSTANT TmaLoadWsINV const tma_load_ws_inv,
+2202:    CUTE_GRID_CONSTANT TmaLoadWsMqk const tma_load_ws_mqk,
+2236:    // Transaction bytes: v + beta + k_decayed + q_decayed + k_restored + g_total + INV + Mqk
+2241:        uint32_t(cute::cosize_v<MMALayout>) * uint32_t(sizeof(BF16)) * 3 +  // k_decayed, q_decayed, k_restored
+2242:        uint32_t(cute::cosize_v<GTotalLayout>) * uint32_t(sizeof(float)) +    // g_total
+2442:                ws_raw.k_decayed + int64_t(ws_idx) * (CHUNK * D),
+2444:                shared_storage.input[stage].k_decayed.begin(),
+2448:                ws_raw.q_decayed + int64_t(ws_idx) * (CHUNK * D),
+2450:                shared_storage.input[stage].q_decayed.begin(),
+2454:                ws_raw.k_restored + int64_t(ws_idx) * (CHUNK * D),
+2456:                shared_storage.input[stage].k_restored.begin(),
+2460:                ws_raw.g_total + int64_t(ws_idx) * D,
+2462:                shared_storage.input[stage].g_total.begin(),
+2508:            Tensor k_decayed = make_tensor(make_smem_ptr(shared_storage.input[load_stage].k_decayed.begin()), MMALayout{});
+2509:            Tensor q_decayed = make_tensor(make_smem_ptr(shared_storage.input[load_stage].q_decayed.begin()), MMALayout{});
+2510:            Tensor k_restored = make_tensor(make_smem_ptr(shared_storage.input[load_stage].k_restored.begin()), MMALayout{});
+2511:            Tensor g_total = make_tensor(make_smem_ptr(shared_storage.input[load_stage].g_total.begin()), GTotalLayout{});
+2522:            Tensor k_restored_t = make_tensor(make_smem_ptr(shared_storage.input[load_stage].k_restored.begin()), TransposedMMALayout{});
+2538:            // A copy: K_INTER → LDSM_N (for k_decayed, q_decayed, INV, Mqk)
+2542:            // A copy: MN_INTER → LDSM_T (for k_restored_t in Phase 7)
+2562:            Tensor A_ref = local_tile(k_decayed, make_shape(Int<16>{}, Int<16>{}), make_coord(0, 0));
+2592:            constexpr int K_BLOCKS = decltype(cute::size<1>(k_decayed))::value / 16;
+2595:                local_tile(k_decayed, make_shape(Int<16>{}, Int<16>{}), make_coord(0, 0))), tCrAi_k_view);
+2597:                local_tile(q_decayed, make_shape(Int<16>{}, Int<16>{}), make_coord(0, 0))), tCrAi_q_view);
+2617:                        local_tile(k_decayed, make_shape(Int<16>{}, Int<16>{}), make_coord(0, k + 1))), tCrAi_k_view);
+2619:                        local_tile(q_decayed, make_shape(Int<16>{}, Int<16>{}), make_coord(0, k + 1))), tCrAi_q_view);
+2718:            // s_acc[D, D] = s_acc * g_total + k_restored_t[D, 16] @ U[16, D]
+2721:            constexpr int S_M_BLOCKS = decltype(cute::size<0>(k_restored_t))::value / 16;
+2732:                Tensor kr_block = local_tile(k_restored_t, make_shape(Int<16>{}, Int<16>{}), make_coord(i, 0));
+2742:                ring_g0[i] = g_total(i * 16 + group_id);
+2743:                ring_g1[i] = g_total(i * 16 + group_id + 8);
+2760:                    Tensor kr_next = local_tile(k_restored_t, make_shape(Int<16>{}, Int<16>{}), make_coord(m + PREFETCH, 0));
+2764:                    ring_g0[slot] = g_total((m + PREFETCH) * 16 + group_id);
+2765:                    ring_g1[slot] = g_total((m + PREFETCH) * 16 + group_id + 8);

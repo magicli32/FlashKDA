@@ -1,0 +1,66 @@
+                          // pack into ONE 16B store per array (rows are
+                          // 112B-strided, so b*SB+i lands 16B-aligned)
+#pragma unroll
+          for (int i = 0; i < SB; i += 8) {
+            alignas(16) __nv_bfloat162 hv[4], lv[4];
+#pragma unroll
+            for (int w = 0; w < 4; ++w) {
+              const float e0 = r[i + 2 * w], e1 = r[i + 2 * w + 1];
+              hv[w] = __nv_bfloat162{__float2bfloat16(e0), __float2bfloat16(e1)};
+              lv[w] = __floats2bfloat162_rn(e0 - __bfloat162float(hv[w].x), e1 - __bfloat162float(hv[w].y));
+            }
+            *reinterpret_cast<uint4*>(&sp.f.upT_h[col][b * SB + i]) = *reinterpret_cast<const uint4*>(hv);
+            *reinterpret_cast<uint4*>(&sp.f.upT_l[col][b * SB + i]) = *reinterpret_cast<const uint4*>(lv);
+          }
+      }
+      __syncthreads();
+    }
+    const size_t base = ((size_t)c * H + h) * BT * K;
+    for (int p2 = tid; p2 < BT * K / 2; p2 += blockDim.x) {
+      const int p = p2 * 2;
+      *reinterpret_cast<__nv_bfloat162*>(&P[base + p]) =
+          __floats2bfloat162_rn(-sU[p / K][p % K], -sU[p / K][p % K + 1]);
+      *reinterpret_cast<float2*>(&u0[base + p]) = float2{sU[p / K][K + p % K], sU[p / K][K + p % K + 1]};
+    }
+    if (!pieceL) continue;
+    // ---- fused W-form products + IN-TAIL RUNNING COMPOSITION ----
+    // Per chunk: W and w0^T products (w0's operands SWAPPED vs the drained
+    // form — A=u0T, B=kdT — so its product lands in state orientation), then
+    // the piece's running maps compose as a NO-DRAIN tf32 TMEM chain:
+    // Lrun/crun are fp32 D pairs ping-ponging between [0,256) and [256,512).
+    // The chunk's W/w0 products target the FREE pair; W alone is drained
+    // (L = diag(e^gC) - W, staged as fp32 SWZ32 tiles); then Lrun_new =
+    // Lrun @ L-tiles overwrites the drained W slot and crun_new = crun @
+    // L-tiles accumulates onto the completed w0 product (the c fold).
+    // ONE commit+wait per chunk (the products'); the compose commit is
+    // waited a chunk LATE (pend_wait, before its B-tile smem is rewritten);
+    // piece-end chunks wait in-chunk and drain the final maps to global.
+    __syncthreads();  // everyone past the P/u0 reads of sU
+    // tail pTt: TMA the L2-hot negated-P copy this CTA stored above — the
+    // [tok][kc] global IS the W mma's MN-major B image (probe-verified: SWZ128
+    // box == the swz128b staging bytes; 2 boxes = the 2 MN atoms at LBO
+    // 8192). Bytes are the former in-smem pack's sign-flipped, so the
+    // product lands -W; the L drain folds the sign exactly. The mb_f
+    // phase is waited by ALL threads before the W mma.
+    if (tid == 0) {
+      ptx::fence_async_global();  // P sts -> async proxy (TMA)
+      ptx::mbar_arrive_expect_tx(&mb_f, uint32_t(sizeof(sp.b.pTt)));
+      ptx::cp_async_bulk_tensor_2d_load(ptx::to_shared(&sp.b.pTt[0][0]), ptm, 0, (c * H + h) * BT, &mb_f);
+      ptx::cp_async_bulk_tensor_2d_load(ptx::to_shared(&sp.b.pTt[64][0]), ptm, 64, (c * H + h) * BT, &mb_f);
+    }
+    const size_t cbase = ((size_t)c * H + h) * BT * K;
+#pragma unroll
+    for (int hb = 0; hb < 2; ++hb) {  // kdec loads issue first (MLP)
+      bf16 kdv[8];
+#pragma unroll
+      for (int j = 0; j < 8; ++j)
+        kdv[j] = kdec[cbase + tid + (hb * 8 + j) * 512];
+#pragma unroll
+      for (int j = 0; j < 8; ++j) {
+        const int p = tid + (hb * 8 + j) * 512;
+        const int kc = p / BT, tok = p % BT;
+        // 128B-swizzle placement (16B atoms XOR row): swz128 desc form
+        const int tokS = (((tok >> 3) ^ (kc & 7)) << 3) | (tok & 7);
+        sp.b.kdT[kc][tokS] = kdv[j];
+        const float uv = sU[tok][K + kc];
+        const bf16 uh = __float2bfloat16(uv);

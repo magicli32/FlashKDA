@@ -1,0 +1,11 @@
+varlen shape=[8192,96,128] seq_lens=[1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024] warmup=0 iters=1 repeats=1
+  flash_kda (bf16 state) : mean=1.0072 ms, min=1.0072 ms, max=1.0072 ms
+  flash_kda (no state)   : mean=0.6573 ms, min=0.6573 ms, max=0.6573 ms
+  flash_kda (fp32 state) : mean=0.6891 ms, min=0.6891 ms, max=0.6891 ms
+  chunk_kda : mean=2.6309 ms, min=2.6309 ms, max=2.6309 ms
+  chunk_gated_delta_rule : mean=1.3903 ms, min=1.3903 ms, max=1.3903 ms
+Collecting data...
+Generating '/tmp/nsys-report-d04f.qdstrm'
+[1/1] [0%                          ] nsys_uniform_h96_u11h_drain_consumers.nsys-rep[1/1] [0%                          ] nsys_uniform_h96_u11h_drain_consumers.nsys-rep[1/1] [5%                          ] nsys_uniform_h96_u11h_drain_consumers.nsys-rep[1/1] [===========51%              ] nsys_uniform_h96_u11h_drain_consumers.nsys-rep[1/1] [========================97% ] nsys_uniform_h96_u11h_drain_consumers.nsys-rep[1/1] [========================98% ] nsys_uniform_h96_u11h_drain_consumers.nsys-rep[1/1] [========================99% ] nsys_uniform_h96_u11h_drain_consumers.nsys-rep[1/1] [========================100%] nsys_uniform_h96_u11h_drain_consumers.nsys-rep[1/1] [========================100%] nsys_uniform_h96_u11h_drain_consumers.nsys-rep
+Generated:
+	/home/lcpu/88934705/lish/FlashKDA-uniform-h96/nsys_uniform_h96_u11h_drain_consumers.nsys-rep

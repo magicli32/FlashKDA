@@ -1,0 +1,6 @@
+K1_seq0  dur_us=898.182 grid=768x1 block=512 regs=64 stream=7
+K2_tmem  dur_us=261.538 grid=768x1 block=512 regs=120 stream=7
+K1_seq0  dur_us=891.558 grid=768x1 block=512 regs=64 stream=7
+K2_tmem  dur_us=260.130 grid=768x1 block=512 regs=120 stream=7
+K1_seq0  dur_us=889.542 grid=768x1 block=512 regs=64 stream=7
+K2_tmem  dur_us=260.770 grid=768x1 block=512 regs=120 stream=7

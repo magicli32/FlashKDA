@@ -1,0 +1,12 @@
+Resource usage:
+ Common:
+  GLOBAL:11 CONSTANT[4]:88
+ Function _ZN20flash_kda_sm103_tmem40_flash_kda_tmem_real_state_mapping_probeEPKvi:
+  REG:32 STACK:0 SHARED:6144 LOCAL:0 CONSTANT[0]:908 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _ZN20flash_kda_sm103_tmem41_flash_kda_tmem_q_workspace_mapping_probeEPKvii:
+  REG:32 STACK:0 SHARED:6144 LOCAL:0 CONSTANT[0]:912 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _ZN20flash_kda_sm103_tmem35_flash_kda_tmem_atmem_mapping_probeEv:
+  REG:32 STACK:0 SHARED:18432 LOCAL:0 CONSTANT[0]:896 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _ZN20flash_kda_sm103_tmem27_flash_kda_tmem_atmem_probeEv:
+  REG:22 STACK:0 SHARED:18432 LOCAL:0 CONSTANT[0]:896 TEXTURE:0 SURFACE:0 SAMPLER:0
+ Function _ZN20flash_kda_sm103_tmem25_flash_kda_tmem_mma_probeEv:

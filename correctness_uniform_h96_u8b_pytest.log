@@ -1,0 +1,48 @@
+....                                                                     [100%]
+=============================== warnings summary ===============================
+tests/test_fwd.py: 14 warnings
+  /home/lcpu/88934705/lish/FlashKDA/.venv-full/lib/python3.12/site-packages/torch/jit/_script.py:365: DeprecationWarning: `torch.jit.script_method` is deprecated. Please switch to `torch.compile` or `torch.export`.
+    warnings.warn(
+
+tests/test_fwd.py: 20 warnings
+  /home/lcpu/88934705/lish/FlashKDA/.venv-full/lib/python3.12/site-packages/fla/utils/_decorators.py:152: DeprecationWarning: `transpose_state_layout` is deprecated and renamed to `state_v_first`.
+    return fn(*processed_args, **processed_kwargs)
+
+tests/test_fwd.py: 20 warnings
+  /home/lcpu/88934705/lish/FlashKDA/.venv-full/lib/python3.12/site-packages/torch/_dynamo/eval_frame.py:1298: DeprecationWarning: `transpose_state_layout` is deprecated and renamed to `state_v_first`.
+    return fn(*args, **kwargs)
+
+tests/test_fwd.py::test_fwd_vs_fla
+  /home/lcpu/88934705/lish/FlashKDA/.venv-full/lib/python3.12/site-packages/fla/utils/_testing.py:39: UserWarning:   g=-8_bias=0 ht diff: 0.006141 ratio: 0.009628
+    warnings.warn(msg)
+
+tests/test_fwd.py::test_fwd_vs_fla
+  /home/lcpu/88934705/lish/FlashKDA/.venv-full/lib/python3.12/site-packages/fla/utils/_testing.py:39: UserWarning: g=-8_bias=0 chunk_kda ht diff: 0.003522 ratio: 0.006833
+    warnings.warn(msg)
+
+tests/test_fwd.py::test_fwd_vs_fla
+  /home/lcpu/88934705/lish/FlashKDA/.venv-full/lib/python3.12/site-packages/fla/utils/_testing.py:39: UserWarning: g=0_bias={-8,8} ht diff: 0.006501 ratio: 0.007842
+    warnings.warn(msg)
+
+tests/test_fwd.py::test_fwd_vs_fla
+  /home/lcpu/88934705/lish/FlashKDA/.venv-full/lib/python3.12/site-packages/fla/utils/_testing.py:39: UserWarning: g=0_bias=U(-8,8) ht diff: 0.010456 ratio: 0.005583
+    warnings.warn(msg)
+
+tests/test_fwd.py::test_fwd_vs_fla
+  /home/lcpu/88934705/lish/FlashKDA/.venv-full/lib/python3.12/site-packages/fla/utils/_testing.py:39: UserWarning: g=0_bias=N(0,8) ht diff: 0.018679 ratio: 0.009340
+    warnings.warn(msg)
+
+tests/test_fwd.py::test_fwd_varlen_vs_fla
+  /home/lcpu/88934705/lish/FlashKDA/.venv-full/lib/python3.12/site-packages/fla/utils/_testing.py:39: UserWarning:   g=-8_bias=0 ht diff: 0.038424 ratio: 0.008926
+    warnings.warn(msg)
+
+tests/test_fwd.py::test_fwd_varlen_vs_fla
+  /home/lcpu/88934705/lish/FlashKDA/.venv-full/lib/python3.12/site-packages/fla/utils/_testing.py:39: UserWarning: g=0_bias={-8,8} ht diff: 0.043673 ratio: 0.008188
+    warnings.warn(msg)
+
+tests/test_fwd.py::test_fwd_varlen_vs_fla
+  /home/lcpu/88934705/lish/FlashKDA/.venv-full/lib/python3.12/site-packages/fla/utils/_testing.py:39: UserWarning: g=0_bias=N(0,8) ht diff: 0.038990 ratio: 0.008465
+    warnings.warn(msg)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+4 passed, 62 warnings in 62.72s (0:01:02)

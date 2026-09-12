@@ -1,0 +1,7 @@
+setup.py:15:    nvcc_threads = os.getenv("NVCC_THREADS") or "32"
+setup.py:19:SUPPORTED_CUDA_ARCHS = ["90a", "100a", "103a", "120a"]
+setup.py:35:    requested = os.getenv("FLASH_KDA_CUDA_ARCHS", "auto").lower()
+setup.py:40:                "FLASH_KDA_CUDA_ARCHS=auto requires a visible CUDA device. "
+setup.py:41:                "Set FLASH_KDA_CUDA_ARCHS=all to build all supported archs."
+setup.py:45:        archs = SUPPORTED_CUDA_ARCHS
+setup.py:51:        flags.extend(["-gencode", f"arch=compute_{arch},code=sm_{arch}"])

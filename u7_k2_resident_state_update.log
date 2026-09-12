@@ -1,0 +1,116 @@
+                cute::transform(out_acc[i], gemm_bf16, [] __device__ (float x) { return BF16(x); });
+                cute::transform(out_bf16[i], gemm_bf16, out_bf16[i], [] __device__ (BF16 c, BF16 a) { return c + a; });
+            }
+
+            // ======== Phase 5: Store final out ========
+            #pragma unroll
+            for (int i = 0; i < 2; ++i) {
+                Tensor out_block = local_tile(out_tile, make_shape(Int<16>{}, Int<16>{}), make_coord(0, warp_id * 2 + i));
+                copy(smem_tiled_store_C, smem_thr_store_C.retile_S(out_bf16[i]), smem_thr_store_C.partition_D(out_block));
+            }
+
+            // ======== Phase 6: resident state update ========
+            //
+            // resident_state =
+            //     resident_state * g_total
+            //   + k_restored^T @ U
+            //
+            // No state shared-memory round trip occurs between chunks.
+            constexpr int S_M_BLOCKS =
+                decltype(cute::size<0>(k_restored_t))::value / 16;
+
+            static_assert(
+                S_M_BLOCKS == kResidentStateRowBlocks,
+                "Phase6 blocking must match resident state blocking");
+
+            Tensor tCrAi_kr =
+                make_fragment_like<BF16>(
+                    thr_mma.partition_fragment_A(A_ref));
+
+            auto tCrAi_kr_view =
+                smem_thr_copy_A_T.retile_D(tCrAi_kr);
+
+            AFragT ring_A_kr[PREFETCH];
+            float ring_g0[PREFETCH];
+            float ring_g1[PREFETCH];
+
+            #pragma unroll
+            for (int i = 0; i < PREFETCH; ++i) {
+                Tensor kr_block = local_tile(
+                    k_restored_t,
+                    make_shape(Int<16>{}, Int<16>{}),
+                    make_coord(i, 0));
+
+                copy(
+                    smem_tiled_copy_A_T,
+                    smem_thr_copy_A_T.partition_S(kr_block),
+                    tCrAi_kr_view);
+
+                cute::transform(
+                    tCrAi_kr,
+                    ring_A_kr[i],
+                    cute::identity{});
+
+                ring_g0[i] =
+                    g_total(i * 16 + group_id);
+
+                ring_g1[i] =
+                    g_total(i * 16 + group_id + 8);
+            }
+
+            #pragma unroll
+            for (int m = 0; m < S_M_BLOCKS; ++m) {
+                const int slot = m % PREFETCH;
+
+                float g0 = ring_g0[slot];
+                float g1 = ring_g1[slot];
+
+                #pragma unroll
+                for (int bi = 0; bi < 2; ++bi) {
+                    clear(u_acc[bi]);
+
+                    gemm(
+                        thr_mma,
+                        ring_A_kr[slot](_,_,Int<0>{}),
+                        tCrB_u_arr[bi](_,_,Int<0>{}),
+                        u_acc[bi]);
+                }
+
+                if (m + PREFETCH < S_M_BLOCKS) {
+                    Tensor kr_next = local_tile(
+                        k_restored_t,
+                        make_shape(Int<16>{}, Int<16>{}),
+                        make_coord(m + PREFETCH, 0));
+
+                    copy(
+                        smem_tiled_copy_A_T,
+                        smem_thr_copy_A_T.partition_S(kr_next),
+                        tCrAi_kr_view);
+
+                    cute::transform(
+                        tCrAi_kr,
+                        ring_A_kr[slot],
+                        cute::identity{});
+
+                    ring_g0[slot] =
+                        g_total(
+                            (m + PREFETCH) * 16 +
+                            group_id);
+
+                    ring_g1[slot] =
+                        g_total(
+                            (m + PREFETCH) * 16 +
+                            group_id + 8);
+                }
+
+                #pragma unroll
+                for (int bi = 0; bi < 2; ++bi) {
+                    auto& state_fragment =
+                        resident_state[bi][m];
+
+                    #pragma unroll
+                    for (int aa = 0; aa < 2; ++aa) {
+                        #pragma unroll
+                        for (int dd = 0; dd < 2; ++dd) {
+                            auto c0 =
+                                make_coord(

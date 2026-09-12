@@ -1,0 +1,91 @@
+                    + size_t(head)
+                ) * size_t(kD)
+                + size_t(value_index);
+
+            output[output_offset] =
+                cutlass::bfloat16_t(value);
+        }
+    }
+
+    tcgen05_fence_before_thread_sync();
+
+    __syncthreads();
+
+    if (warp == 0) {
+        tcgen05_dealloc(
+            taddr,
+            512
+        );
+    }
+
+    tcgen05_relinquish();
+#endif
+}
+
+
+
+// Add one expected asynchronous transaction to a raw
+// shared-memory mbarrier phase.
+static __device__ __forceinline__ void
+tmem_k2_mbar_arrive_expect_tx(
+    uint64_t* barrier,
+    uint32_t transaction_bytes
+) {
+#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ == 1030)
+    asm volatile(
+        "mbarrier.arrive.expect_tx.shared.b64 "
+        "_, [%0], %1;"
+        :
+        : "r"(to_shared(barrier)),
+          "r"(transaction_bytes)
+        : "memory"
+    );
+#else
+    (void)barrier;
+    (void)transaction_bytes;
+#endif
+}
+
+// U11-E shared storage.
+//
+// q_decayed contains two independent 4096-byte stages.
+// Each stage has its own TMA transaction barrier.
+struct alignas(1024)
+TmemK2QPipelineSharedStorage {
+    alignas(1024)
+    __nv_bfloat16 q_decayed[2][2][16][64];
+
+    alignas(8)
+    uint64_t mma_barrier;
+
+    // Raw storage avoids constructing CUTLASS's
+    // non-default-constructible barrier wrapper.
+    alignas(16)
+    uint64_t q_ready[2];
+
+    uint32_t tmem_addr;
+};
+
+// U11-B performance skeleton.
+//
+// One 512-thread CTA owns one (sequence, head), loads the
+// real initial state once, allocates TMEM once, then walks
+// all 64 real q_decayed chunks serially.
+//
+// The recurrent state is intentionally held fixed. This
+// isolates the amortized q-product, TMEM and drain cost.
+// The established K2 afterward overwrites every output.
+template <
+    bool DrainOutput,
+    bool ReloadQ = true
+>
+__global__ void
+__launch_bounds__(512, 1)
+_flash_kda_tmem_k2_64chunk_skeleton(
+    void const* initial_state,
+    void const* q_workspace,
+    cutlass::bfloat16_t* output,
+    int total_tiles,
+    int H
+) {
+#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ == 1030)

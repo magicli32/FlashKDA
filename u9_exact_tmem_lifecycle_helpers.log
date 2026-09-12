@@ -1,0 +1,22 @@
+  asm volatile("ld.acquire.gpu.global.b32 %0, [%1];" : "=r"(ret) : "l"(ptr));
+  return ret;
+}
+// make generic-proxy global writes visible to the async proxy (consumers
+// read the published factor tensors via TMA)
+static __device__ __forceinline__ void fence_async_global() {
+  asm volatile("fence.proxy.async.global;");
+}
+
+// ---- tcgen05 (TMEM lifecycle, ld/st, MMA, fences) ----
+static __device__ __forceinline__ void tcgen05_alloc(uint32_t smem_addr_for_taddr, uint32_t n_cols) {
+  asm volatile(
+      "tcgen05.alloc.cta_group::1.sync.aligned.shared::cta.b32 [%0], %1;" ::"r"(smem_addr_for_taddr), "r"(n_cols));
+}
+static __device__ __forceinline__ void tcgen05_dealloc(uint32_t taddr, uint32_t n_cols) {
+  asm volatile("tcgen05.dealloc.cta_group::1.sync.aligned.b32 %0, %1;" ::"r"(taddr), "r"(n_cols));
+}
+static __device__ __forceinline__ void tcgen05_relinquish() {
+  asm volatile("tcgen05.relinquish_alloc_permit.cta_group::1.sync.aligned;");
+}
+static __device__ __forceinline__ void
+tcgen05_st_32x32b_x4(uint32_t taddr, uint32_t r0, uint32_t r1, uint32_t r2, uint32_t r3) {

@@ -1,0 +1,57 @@
+diff --git a/csrc/smxx/utils.cuh b/csrc/smxx/utils.cuh
+index 498d67c..301089b 100644
+--- a/csrc/smxx/utils.cuh
++++ b/csrc/smxx/utils.cuh
+@@ -2,6 +2,7 @@
+ 
+ #include <cuda_runtime.h>
+ #include <cuda_fp16.h>
++#include <cuda_bf16.h>
+ #include <cuda/atomic>
+ 
+ #include <cstdio>
+@@ -355,8 +356,21 @@ __device__ void smem_cvt_fp32_to_bf16(
+         int e1 = lane_id * 2 + 1;
+         int r0 = br + e0 / kBlock, c0 = bc + e0 % kBlock;
+         int r1 = br + e1 / kBlock, c1 = bc + e1 % kBlock;
+-        bf16_view(r0, c0) = BF16(fp32_view(r0, c0));
+-        bf16_view(r1, c1) = BF16(fp32_view(r1, c1));
++        // U5-B2: preserve the two logical layout addresses,
++        // but convert both FP32 values with one packed instruction.
++        __nv_bfloat162 packed_bf16 =
++            __floats2bfloat162_rn(
++                fp32_view(r0, c0),
++                fp32_view(r1, c1)
++            );
++
++        __nv_bfloat162_raw raw_bf16 =
++            static_cast<__nv_bfloat162_raw>(
++                packed_bf16
++            );
++
++        bf16_view(r0, c0).storage = raw_bf16.x;
++        bf16_view(r1, c1).storage = raw_bf16.y;
+     }
+ }
+ 
+@@ -385,8 +399,18 @@ __device__ void smem_cvt_bf16_to_fp32(
+         int e1 = lane_id * 2 + 1;
+         int r0 = br + e0 / kBlock, c0 = bc + e0 % kBlock;
+         int r1 = br + e1 / kBlock, c1 = bc + e1 % kBlock;
+-        fp32_view(r0, c0) = bf16_to_f32(bf16_view(r0, c0));
+-        fp32_view(r1, c1) = bf16_to_f32(bf16_view(r1, c1));
++        // U5-B2: gather the two logical BF16 elements into
++        // one packed register, then convert both together.
++        __nv_bfloat162_raw raw_bf16;
++        raw_bf16.x = bf16_view(r0, c0).storage;
++        raw_bf16.y = bf16_view(r1, c1).storage;
++
++        __nv_bfloat162 packed_bf16(raw_bf16);
++        float2 packed_fp32 =
++            __bfloat1622float2(packed_bf16);
++
++        fp32_view(r0, c0) = packed_fp32.x;
++        fp32_view(r1, c1) = packed_fp32.y;
+     }
+ }
+ 

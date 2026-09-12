@@ -1,0 +1,18 @@
+csrc/smxx/utils.cuh:91:    char* packed_base = nullptr;
+csrc/smxx/fwd_kernel1.cuh:576:        if (ws_raw.packed_base != nullptr) {
+csrc/smxx/fwd_kernel1.cuh:578:                ws_raw.packed_base +
+csrc/smxx/fwd_kernel1.cuh:579:                int64_t(ws_idx) * PackedWS::kPerTile;
+csrc/smxx/fwd_kernel2.cuh:388:            if (ws_raw.packed_base != nullptr) {
+csrc/smxx/fwd_kernel2.cuh:393:                    ws_raw.packed_base +
+csrc/smxx/fwd_kernel2.cuh:395:                    PackedWS::kPerTile;
+csrc/smxx/fwd_kernel2.cuh:406:                    int32_t(PackedWS::kPerTile));
+csrc/smxx/fwd_kernel2.cuh:1449:            if (ws_raw.packed_base != nullptr) {
+csrc/smxx/fwd_kernel2.cuh:1454:                    ws_raw.packed_base +
+csrc/smxx/fwd_kernel2.cuh:1456:                    PackedWS::kPerTile;
+csrc/smxx/fwd_kernel2.cuh:1467:                    int32_t(PackedWS::kPerTile));
+csrc/smxx/fwd_kernel2.cuh:2483:            if (ws_raw.packed_base != nullptr) {
+csrc/smxx/fwd_kernel2.cuh:2488:                    ws_raw.packed_base +
+csrc/smxx/fwd_kernel2.cuh:2490:                    PackedWS::kPerTile;
+csrc/smxx/fwd_kernel2.cuh:2501:                    int32_t(PackedWS::kPerTile));
+csrc/smxx/fwd_launch.cu:133:                "FLASH_KDA_UNIFORM_H96_PACKED_WORKSPACE");
+csrc/smxx/fwd_launch.cu:143:            ws_raw.packed_base = ws;

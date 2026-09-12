@@ -1,0 +1,98 @@
+// ---- MMA descriptors (smem matrix desc + instruction desc, Table 44) ----
+enum class Major : uint8_t { K = 0, MN = 1 };
+enum class F16Type : uint8_t { F16 = 0, BF16 = 1 };
+enum class DType : uint8_t { F16 = 0, F32 = 1, S32 = 2 };
+
+__host__ __device__ static __forceinline__ constexpr uint64_t
+mma_smem_desc(uint32_t matrix_addr, uint32_t lbo, uint32_t sbo, uint32_t base_offset, int swizzle_bytes) {
+  auto enc = [](uint32_t x) -> uint64_t { return (uint64_t)((x & 0x3FFFFu) >> 4); };
+  uint8_t code = (swizzle_bytes == 128) ? 2u : (swizzle_bytes == 64) ? 4u : (swizzle_bytes == 32) ? 6u : 0u;
+  uint64_t d = 0;
+  d |= enc(matrix_addr);                    // bits  0-13
+  d |= enc(lbo) << 16;                      // bits 16-29
+  d |= enc(sbo) << 32;                      // bits 32-45
+  d |= uint64_t(1u) << 46;                  // version = 1
+  d |= uint64_t(base_offset & 0x7u) << 49;  // bits 49-51
+  d |= uint64_t(code & 0x7u) << 61;         // bits 61-63
+  return d;
+}
+template <typename T, int BLOCK_K, int SWIZZLE_BYTES>
+__host__ __device__ static __forceinline__ constexpr uint64_t
+mma_smem_desc_k_major(uint32_t addr, uint32_t base_offset = 0) {
+  constexpr int K_BYTES = BLOCK_K * int(sizeof(T));
+  static_assert(SWIZZLE_BYTES == K_BYTES, "K-major requires swizzle bytes == BLOCK_K * sizeof(T)");
+  return mma_smem_desc(addr, /*lbo=*/0u, /*sbo=*/8u * uint32_t(K_BYTES), base_offset, SWIZZLE_BYTES);
+}
+// MN-major operand (inner = N for B) over swizzle-atom-form smem: adjacent
+// K-row groups of 8 at SBO = 8 * SWZ within an MN-chunk, adjacent MN-chunks
+// (one SWZ128 TMA box each) at LBO = BLOCK_K * SWZ.
+template <typename T, int BLOCK_K, int BLOCK_MN, int SWIZZLE_BYTES>
+__host__ __device__ static __forceinline__ constexpr uint64_t
+mma_smem_desc_mn_major(uint32_t addr, uint32_t base_offset = 0) {
+  constexpr int BLOCK_MN_BYTES = BLOCK_MN * int(sizeof(T));
+  static_assert(
+      SWIZZLE_BYTES == 32 || SWIZZLE_BYTES == 64 || SWIZZLE_BYTES == 128, "MN-major requires SWZ in {32, 64, 128}");
+  static_assert(BLOCK_MN_BYTES % SWIZZLE_BYTES == 0, "MN-major: BLOCK_MN * sizeof(T) must tile the swizzle atom");
+  return mma_smem_desc(
+      addr,
+      /*lbo=*/uint32_t(BLOCK_K * SWIZZLE_BYTES),
+      /*sbo=*/uint32_t(8 * SWIZZLE_BYTES),
+      base_offset,
+      SWIZZLE_BYTES);
+}
+__host__ __device__ static __forceinline__ constexpr uint32_t mma_inst_desc_f16(
+    uint32_t M,
+    uint32_t N,
+    F16Type a_type = F16Type::BF16,
+    F16Type b_type = F16Type::BF16,
+    DType d_type = DType::F32,
+    Major a_major = Major::K,
+    Major b_major = Major::K) {
+  uint32_t d = 0;
+  d |= (static_cast<uint32_t>(d_type) & 0x3u) << 4;
+  d |= (static_cast<uint32_t>(a_type) & 0x7u) << 7;
+  d |= (static_cast<uint32_t>(b_type) & 0x7u) << 10;
+  d |= (static_cast<uint32_t>(a_major) & 0x1u) << 15;
+  d |= (static_cast<uint32_t>(b_major) & 0x1u) << 16;
+  d |= ((N >> 3) & 0x3Fu) << 17;
+  d |= ((M >> 4) & 0x1Fu) << 24;
+  return d;
+}
+__host__ __device__ static __forceinline__ constexpr uint32_t mma_inst_desc_tf32(
+    uint32_t M, uint32_t N, DType d_type = DType::F32, Major a_major = Major::K, Major b_major = Major::K) {
+  constexpr uint32_t TF32 = 2u;
+  uint32_t d = 0;
+  d |= (static_cast<uint32_t>(d_type) & 0x3u) << 4;
+  d |= TF32 << 7;   // atype = TF32 = 2
+  d |= TF32 << 10;  // btype = TF32 = 2
+  d |= (static_cast<uint32_t>(a_major) & 0x1u) << 15;
+  d |= (static_cast<uint32_t>(b_major) & 0x1u) << 16;
+  d |= ((N >> 3) & 0x3Fu) << 17;
+  d |= ((M >> 4) & 0x1Fu) << 24;
+  return d;
+}
+// thin shim keeping the kernel bodies identical to the development source
+enum class MmaDenseKind : uint8_t { F16 = 0 };
+template <MmaDenseKind KIND>
+__host__ __device__ static __forceinline__ constexpr uint32_t mma_inst_desc_dense(
+    uint32_t M,
+    uint32_t N,
+    F16Type a_type,
+    F16Type b_type,
+    DType d_type = DType::F32,
+    Major a_major = Major::K,
+    Major b_major = Major::K) {
+  static_assert(KIND == MmaDenseKind::F16);
+  return mma_inst_desc_f16(M, N, a_type, b_type, d_type, a_major, b_major);
+}
+
+}  // namespace ptx
+
+namespace kda {
+
+constexpr int BT = 64;  // chunk tokens
+constexpr int K = 128;  // head dim (qk == v)
+using bf16 = __nv_bfloat16;
+
+// balanced piece boundaries (k1's wall = the LONGEST piece: only a
+// balanced split minimizes it)

@@ -1,0 +1,29 @@
+
+NOTICE: Existing SQLite export found: nsys_uniform_h96_u8b_protocol_removed.sqlite
+        It is assumed file was previously exported from: nsys_uniform_h96_u8b_protocol_removed.nsys-rep
+        Consider using --force-export=true if needed.
+
+Processing [nsys_uniform_h96_u8b_protocol_removed.sqlite] with [/opt/nvidia/nsight-systems/2025.3.2/host-linux-x64/reports/cuda_api_sum.py]... 
+Time (%),Total Time (ns),Num Calls,Avg (ns),Med (ns),Min (ns),Max (ns),StdDev (ns),Name
+93.6,672688309,16,42043019.3,33666085.0,79120,169852788,45617405.8,cuLibraryLoadData
+4.6,33371912,75,444958.8,7750.0,2660,12725114,1574016.9,cudaLaunchKernel
+0.9,6786839,15,452455.9,459087.0,2260,1891655,500490.0,cudaDeviceSynchronize
+0.4,2841609,14,202972.1,131028.0,89629,463146,131684.7,cudaMalloc
+0.2,1592607,13,122508.2,111069.0,30410,250178,65142.6,cuModuleLoadData
+0.1,779834,2,389917.0,389917.0,16120,763714,528628.8,cudaHostAlloc
+0.0,238389,32,7449.7,5779.5,2510,32871,6156.0,cuLaunchKernelEx
+0.0,104228,5,20845.6,20960.0,16310,25130,3567.4,cudaMemcpyAsync
+0.0,73121,25,2924.8,1380.0,460,12951,3504.9,cuLibraryGetKernel
+0.0,34679,10,3467.9,2510.0,1670,8390,2525.8,cudaEventRecordWithFlags_v11010
+0.0,31327,25,1253.1,590.0,140,11780,2355.1,cudaStreamIsCapturing_v10000
+0.0,31301,3,10433.7,9491.0,7490,14320,3511.2,cudaStreamSynchronize
+0.0,25568,10,2556.8,1005.0,440,13129,3946.4,cudaEventCreateWithFlags
+0.0,24051,10,2405.1,1880.0,1390,4549,1209.4,cudaEventQuery
+0.0,21527,138,156.0,120.0,109,2719,275.0,cudaGetDriverEntryPointByVersion_v12050
+0.0,15481,75,206.4,90.0,40,780,193.8,cuKernelGetName
+0.0,13105,138,95.0,60.0,50,1820,202.6,cuTensorMapEncodeTiled
+0.0,9009,16,563.1,140.0,109,3291,897.3,cudaStreamGetCaptureInfo_v12030
+0.0,7298,10,729.8,330.0,170,1860,764.5,cudaEventDestroy
+0.0,1100,1,1100.0,1100.0,1100,1100,0.0,cuModuleGetLoadingMode
+0.0,241,2,120.5,120.5,70,171,71.4,cudaGetDeviceProperties_v12000
+

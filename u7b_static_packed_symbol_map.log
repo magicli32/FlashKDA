@@ -1,0 +1,16 @@
+csrc/smxx/fwd_kernel1.cuh:120:    bool PackedWorkspace = false
+csrc/smxx/fwd_kernel1.cuh:577:        if constexpr (PackedWorkspace) {
+csrc/smxx/fwd_kernel2.cuh:140:    bool PackedWorkspace = false
+csrc/smxx/fwd_kernel2.cuh:389:            if constexpr (PackedWorkspace) {
+csrc/smxx/fwd_kernel2.cuh:887:    bool PackedWorkspace = false
+csrc/smxx/fwd_kernel2.cuh:1451:            if constexpr (PackedWorkspace) {
+csrc/smxx/fwd_kernel2.cuh:2237:    bool PackedWorkspace = false
+csrc/smxx/fwd_kernel2.cuh:2486:            if constexpr (PackedWorkspace) {
+csrc/smxx/fwd_launch.cu:130:    bool use_packed_workspace = false;
+csrc/smxx/fwd_launch.cu:137:        use_packed_workspace =
+csrc/smxx/fwd_launch.cu:433:                if (use_packed_workspace) {
+csrc/smxx/fwd_launch.cu:458:            } else if (use_packed_workspace) {
+csrc/smxx/fwd_launch.cu:529:                    if (use_packed_workspace) {
+csrc/smxx/fwd_launch.cu:560:                        if (use_packed_workspace) {
+csrc/smxx/fwd_launch.cu:593:                    if (use_packed_workspace) {
+csrc/smxx/fwd_launch.cu:625:                    if (use_packed_workspace) {

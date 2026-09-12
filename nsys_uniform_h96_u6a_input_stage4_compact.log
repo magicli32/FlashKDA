@@ -1,0 +1,12 @@
+01 K1           dur_us= 282.915 grid=512x96 block=256 regs=32 static_smem_mb=0.000 dynamic_smem_mb=0.021 stream=7
+02 K2_resident  dur_us= 339.971 grid=8x96 block=192 regs=166 static_smem_mb=0.000 dynamic_smem_mb=0.113 stream=7
+03 K1           dur_us= 276.195 grid=512x96 block=256 regs=32 static_smem_mb=0.000 dynamic_smem_mb=0.021 stream=7
+04 K2_resident  dur_us= 339.907 grid=8x96 block=192 regs=166 static_smem_mb=0.000 dynamic_smem_mb=0.113 stream=7
+05 K1           dur_us= 276.995 grid=512x96 block=256 regs=32 static_smem_mb=0.000 dynamic_smem_mb=0.021 stream=7
+06 K2_shared    dur_us= 372.131 grid=8x96 block=192 regs=118 static_smem_mb=0.000 dynamic_smem_mb=0.113 stream=7
+07 K1           dur_us= 278.179 grid=512x96 block=256 regs=32 static_smem_mb=0.000 dynamic_smem_mb=0.021 stream=7
+08 K2_shared    dur_us= 372.163 grid=8x96 block=192 regs=118 static_smem_mb=0.000 dynamic_smem_mb=0.113 stream=7
+09 K1           dur_us= 281.155 grid=512x96 block=256 regs=32 static_smem_mb=0.000 dynamic_smem_mb=0.021 stream=7
+10 K2_generic   dur_us= 403.012 grid=8x96 block=192 regs=118 static_smem_mb=0.000 dynamic_smem_mb=0.113 stream=7
+11 K1           dur_us= 277.827 grid=512x96 block=256 regs=32 static_smem_mb=0.000 dynamic_smem_mb=0.021 stream=7
+12 K2_generic   dur_us= 403.492 grid=8x96 block=192 regs=118 static_smem_mb=0.000 dynamic_smem_mb=0.113 stream=7

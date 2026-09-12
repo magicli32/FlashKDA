@@ -1,0 +1,41 @@
+5-
+6-#include <cstdlib>
+7-
+8-// ==================== launch_fwd ====================
+9-template <int D, bool HasStateIn, bool HasStateOut, bool StateFP32, bool IsVarlen>
+10:void launch_fwd(
+11-    cutlass::bfloat16_t const* q_ptr,
+12-    cutlass::bfloat16_t const* k_ptr,
+13-    cutlass::bfloat16_t const* v_ptr,
+14-    cutlass::bfloat16_t const* g_bf16_ptr,
+15-    cutlass::bfloat16_t const* beta_ptr,
+16-    void const* initial_state_ptr,
+17-    void const* correction_state_ptr,
+18-    float scale,
+19-    void* final_state_ptr,
+20-    cutlass::bfloat16_t* out_ptr,
+21-    void* workspace_ptr,
+22-    int total_tiles,
+23-    int T_total,
+24-    int H,
+25-    int N,
+26-    int64_t const* cu_seqlens_ptr,
+27-    float const* A_log_ptr,
+28-    float const* dt_bias_ptr,
+29-    float gate_scale,
+30-    cudaStream_t stream
+31-) {
+32-    using BF16 = cutlass::bfloat16_t;
+33-    constexpr int kInputStages = 3;
+34-    constexpr int kOutputStages = 2;
+35-    constexpr int CHUNK = 16;
+36-
+37-    using K1L = K1Layouts<D, CHUNK>;
+38-    using K2L = K2Layouts<D, CHUNK>;
+39-    using WS = WorkspaceSizes<CHUNK, D>;
+40-
+41-    // TMA layouts for Kernel 1
+42-    using TMAQKLayout = typename K1L::TMAQKLayout;
+43-    using TMAGLayout = typename K1L::TMAGLayout;
+44-    using TMABetaSmemLayout = typename K1L::TMABetaSmemLayout;
+45-    using TMAVOLayout = typename K1L::TMAVOLayout;

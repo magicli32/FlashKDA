@@ -1,0 +1,12 @@
+===== INPUT CHECK =====
+q                match=True
+k                match=True
+v                match=True
+g                match=True
+beta             match=True
+A_log            match=True
+dt_bias          match=True
+initial_state    match=True
+fp32 output      equal=True mismatch=0 max_abs=0 mean_abs=0
+fp32 state       equal=True mismatch=0 max_abs=0 mean_abs=0
+UNIFORM_H96_U5B2_EXACT_MATCH=PASS

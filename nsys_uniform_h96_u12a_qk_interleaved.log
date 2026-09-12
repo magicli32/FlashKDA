@@ -1,0 +1,33 @@
+===== RUN U11H-Q1 =====
+varlen shape=[8192,96,128] seq_lens=[1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024] warmup=0 iters=1 repeats=1
+  flash_kda (bf16 state) : mean=1.0152 ms, min=1.0152 ms, max=1.0152 ms
+  flash_kda (no state)   : mean=0.6572 ms, min=0.6572 ms, max=0.6572 ms
+  flash_kda (fp32 state) : mean=0.6852 ms, min=0.6852 ms, max=0.6852 ms
+  chunk_kda : mean=2.6207 ms, min=2.6207 ms, max=2.6207 ms
+  chunk_gated_delta_rule : mean=1.3795 ms, min=1.3795 ms, max=1.3795 ms
+===== RUN U12A-QK1 =====
+varlen shape=[8192,96,128] seq_lens=[1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024] warmup=0 iters=1 repeats=1
+  flash_kda (bf16 state) : mean=1.0175 ms, min=1.0175 ms, max=1.0175 ms
+  flash_kda (no state)   : mean=0.6542 ms, min=0.6542 ms, max=0.6542 ms
+  flash_kda (fp32 state) : mean=0.6838 ms, min=0.6838 ms, max=0.6838 ms
+  chunk_kda : mean=2.4752 ms, min=2.4752 ms, max=2.4752 ms
+  chunk_gated_delta_rule : mean=1.3284 ms, min=1.3284 ms, max=1.3284 ms
+===== RUN U12A-QK2 =====
+varlen shape=[8192,96,128] seq_lens=[1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024] warmup=0 iters=1 repeats=1
+  flash_kda (bf16 state) : mean=0.9891 ms, min=0.9891 ms, max=0.9891 ms
+  flash_kda (no state)   : mean=0.6540 ms, min=0.6540 ms, max=0.6540 ms
+  flash_kda (fp32 state) : mean=0.6841 ms, min=0.6841 ms, max=0.6841 ms
+  chunk_kda : mean=2.4522 ms, min=2.4522 ms, max=2.4522 ms
+  chunk_gated_delta_rule : mean=1.3276 ms, min=1.3276 ms, max=1.3276 ms
+===== RUN U11H-Q2 =====
+varlen shape=[8192,96,128] seq_lens=[1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024] warmup=0 iters=1 repeats=1
+  flash_kda (bf16 state) : mean=0.9206 ms, min=0.9206 ms, max=0.9206 ms
+  flash_kda (no state)   : mean=0.6528 ms, min=0.6528 ms, max=0.6528 ms
+  flash_kda (fp32 state) : mean=0.6827 ms, min=0.6827 ms, max=0.6827 ms
+  chunk_kda : mean=2.4583 ms, min=2.4583 ms, max=2.4583 ms
+  chunk_gated_delta_rule : mean=1.3276 ms, min=1.3276 ms, max=1.3276 ms
+Collecting data...
+Generating '/tmp/nsys-report-ffa9.qdstrm'
+[1/1] [0%                          ] nsys_uniform_h96_u12a_qk_interleaved.nsys-rep[1/1] [0%                          ] nsys_uniform_h96_u12a_qk_interleaved.nsys-rep[1/1] [14%                         ] nsys_uniform_h96_u12a_qk_interleaved.nsys-rep[1/1] [============55%             ] nsys_uniform_h96_u12a_qk_interleaved.nsys-rep[1/1] [=======================96%  ] nsys_uniform_h96_u12a_qk_interleaved.nsys-rep[1/1] [========================97% ] nsys_uniform_h96_u12a_qk_interleaved.nsys-rep[1/1] [========================98% ] nsys_uniform_h96_u12a_qk_interleaved.nsys-rep[1/1] [========================100%] nsys_uniform_h96_u12a_qk_interleaved.nsys-rep[1/1] [========================100%] nsys_uniform_h96_u12a_qk_interleaved.nsys-rep
+Generated:
+	/home/lcpu/88934705/lish/FlashKDA-uniform-h96/nsys_uniform_h96_u12a_qk_interleaved.nsys-rep

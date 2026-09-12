@@ -1,0 +1,35 @@
+csrc/smxx/utils.cuh:72:    static constexpr int kKDecayed  = CHUNK * D * 2;        // 4096
+csrc/smxx/utils.cuh:73:    static constexpr int kQDecayed  = CHUNK * D * 2;        // 4096
+csrc/smxx/utils.cuh:74:    static constexpr int kKRestored = CHUNK * D * 2;        // 4096
+csrc/smxx/utils.cuh:75:    static constexpr int kGTotal    = D * 4;                 // 512
+csrc/smxx/utils.cuh:76:    static constexpr int kINV       = CHUNK * CHUNK * 2;     // 512
+csrc/smxx/utils.cuh:77:    static constexpr int kMqk       = CHUNK * CHUNK * 2;     // 512
+csrc/smxx/utils.cuh:78:    static constexpr int64_t kPerTile = kKDecayed + kQDecayed + kKRestored + kGTotal + kINV + kMqk;
+csrc/smxx/fwd_launch.cu:114:    BF16*  ws_qd  = reinterpret_cast<BF16*>(ws + n_ht * WS::kKDecayed);
+csrc/smxx/fwd_launch.cu:115:    BF16*  ws_kr  = reinterpret_cast<BF16*>(ws + n_ht * (WS::kKDecayed + WS::kQDecayed));
+csrc/smxx/fwd_launch.cu:116:    float* ws_gt  = reinterpret_cast<float*>(ws + n_ht * (WS::kKDecayed + WS::kQDecayed + WS::kKRestored));
+csrc/smxx/fwd_launch.cu:117:    BF16*  ws_inv = reinterpret_cast<BF16*>(ws + n_ht * (WS::kKDecayed + WS::kQDecayed + WS::kKRestored + WS::kGTotal));
+csrc/smxx/fwd_launch.cu:118:    BF16*  ws_mqk = reinterpret_cast<BF16*>(ws + n_ht * (WS::kKDecayed + WS::kQDecayed + WS::kKRestored + WS::kGTotal + WS::kINV));
+csrc/smxx/fwd_launch.cu:130:    int* ws_tile_prefix = reinterpret_cast<int*>(ws + n_ht * WS::kPerTile);
+csrc/smxx/fwd_launch.cu:673:    BF16*  ws_kr  = reinterpret_cast<BF16*>(ws + n_ht * (WS::kKDecayed + WS::kQDecayed));
+csrc/smxx/fwd_launch.cu:674:    float* ws_gt  = reinterpret_cast<float*>(ws + n_ht * (WS::kKDecayed + WS::kQDecayed + WS::kKRestored));
+csrc/smxx/fwd_launch.cu:675:    BF16*  ws_inv = reinterpret_cast<BF16*>(ws + n_ht * (WS::kKDecayed + WS::kQDecayed + WS::kKRestored + WS::kGTotal));
+csrc/smxx/fwd_launch.cu:780:    BF16*  ws_kr  = reinterpret_cast<BF16*>(ws + n_ht * (WS::kKDecayed + WS::kQDecayed));
+csrc/smxx/fwd_launch.cu:781:    float* ws_gt  = reinterpret_cast<float*>(ws + n_ht * (WS::kKDecayed + WS::kQDecayed + WS::kKRestored));
+csrc/smxx/fwd_launch.cu:782:    BF16*  ws_inv = reinterpret_cast<BF16*>(ws + n_ht * (WS::kKDecayed + WS::kQDecayed + WS::kKRestored + WS::kGTotal));
+csrc/smxx/fwd_launch.cu:890:            ws + n_ht * WS::kKDecayed);
+csrc/smxx/fwd_launch.cu:895:            (WS::kKDecayed +
+csrc/smxx/fwd_launch.cu:896:             WS::kQDecayed));
+csrc/smxx/fwd_launch.cu:901:            (WS::kKDecayed +
+csrc/smxx/fwd_launch.cu:902:             WS::kQDecayed +
+csrc/smxx/fwd_launch.cu:903:             WS::kKRestored));
+csrc/smxx/fwd_launch.cu:908:            (WS::kKDecayed +
+csrc/smxx/fwd_launch.cu:909:             WS::kQDecayed +
+csrc/smxx/fwd_launch.cu:910:             WS::kKRestored +
+csrc/smxx/fwd_launch.cu:911:             WS::kGTotal));
+csrc/smxx/fwd_launch.cu:916:            (WS::kKDecayed +
+csrc/smxx/fwd_launch.cu:917:             WS::kQDecayed +
+csrc/smxx/fwd_launch.cu:918:             WS::kKRestored +
+csrc/smxx/fwd_launch.cu:919:             WS::kGTotal +
+csrc/smxx/fwd_launch.cu:920:             WS::kINV));
+csrc/smxx/fwd_launch.cu:933:            ws + n_ht * WS::kPerTile);

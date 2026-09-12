@@ -1,0 +1,472 @@
+                    size_t const output_offset =
+                        (
+                            size_t(token) * size_t(H)
+                            + size_t(head)
+                        ) * size_t(kD)
+                        + size_t(value_index);
+
+                    output[output_offset] =
+                        cutlass::bfloat16_t(value);
+                }
+            }
+        }
+
+        // Complete all TMEM drains before the next q tile
+        // overwrites the single shared-memory slot.
+        tcgen05_fence_before_thread_sync();
+
+        __syncthreads();
+    }
+
+    if (warp == 0) {
+        tcgen05_dealloc(
+            taddr,
+            512
+        );
+    }
+
+    tcgen05_relinquish();
+#endif
+}
+
+
+// U11-E asynchronous q-pipeline diagnostic.
+//
+// Recurrent state remains fixed and output draining is
+// compiled out. Relative to U11-C, MMA work, MMA waits and
+// CTA barriers remain, but real q_decayed workspace tiles
+// use a two-stage asynchronous G2S pipeline.
+
+template <
+    bool DrainOutput,
+    bool SingleQConsumer = false,
+    bool DrainConsumersOnly = false
+>
+__global__ void
+__launch_bounds__(512, 1)
+_flash_kda_tmem_k2_q_pipeline(
+    void const* initial_state,
+    void const* q_workspace,
+    cutlass::bfloat16_t* output,
+    int total_tiles,
+    int H
+) {
+#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ == 1030)
+    __shared__
+    TmemK2QPipelineSharedStorage shared;
+
+    int const tid = int(threadIdx.x);
+    int const warp = tid >> 5;
+    int const lane = tid & 31;
+
+    int const band =
+        (warp & 3) * 32;
+
+    int const ch =
+        warp >> 2;
+
+    int const value_index =
+        band + lane;
+
+    int const sequence =
+        int(blockIdx.x) / H;
+
+    int const head =
+        int(blockIdx.x) % H;
+
+    constexpr int kD = 128;
+    constexpr int kChunk = 16;
+    constexpr int kTilesPerSequence = 64;
+
+    constexpr int kQTileBytes =
+        kChunk * kD * int(sizeof(uint16_t));
+
+    static_assert(
+        kQTileBytes % int(sizeof(uint4)) == 0
+    );
+
+    constexpr int kQVectors =
+        kQTileBytes / int(sizeof(uint4));
+
+    size_t const state_matrix_offset =
+        size_t(sequence * H + head)
+        * size_t(kD * kD);
+
+    auto const* state =
+        reinterpret_cast<
+            cutlass::bfloat16_t const*
+        >(initial_state)
+        + state_matrix_offset;
+
+    if (tid == 0) {
+        mbar_init(
+            &shared.mma_barrier,
+            1
+        );
+
+        mbar_init(
+            &shared.q_ready[0],
+            1
+        );
+
+        mbar_init(
+            &shared.q_ready[1],
+            1
+        );
+
+        // Generic barrier initialization must become visible
+        // to the TMA async proxy before the first bulk copy.
+        cutlass::arch::fence_barrier_init();
+    }
+
+    // TMEM allocation and state staging happen once per
+    // complete 64-chunk sequence.
+    if (warp == 0) {
+        tcgen05_alloc(
+            to_shared(&shared.tmem_addr),
+            512
+        );
+    }
+
+    __syncthreads();
+
+    uint32_t const taddr =
+        shared.tmem_addr;
+
+    uint32_t const lane_hi =
+        uint32_t(band) << 16;
+
+    uint32_t packed_state[16];
+
+#pragma unroll
+    for (
+        int pair_index = 0;
+        pair_index < 16;
+        ++pair_index
+    ) {
+        int const k0 =
+            ch * 32 + 2 * pair_index;
+
+        int const k1 =
+            k0 + 1;
+
+        float const value0 =
+            bf16_to_f32(
+                state[
+                    k0 * kD
+                    + value_index
+                ]
+            );
+
+        float const value1 =
+            bf16_to_f32(
+                state[
+                    k1 * kD
+                    + value_index
+                ]
+            );
+
+        __nv_bfloat162 pair =
+            __floats2bfloat162_rn(
+                value0,
+                value1
+            );
+
+        packed_state[pair_index] =
+            *reinterpret_cast<
+                uint32_t const*
+            >(&pair);
+    }
+
+    uint32_t const a_tmem =
+        taddr
+        + lane_hi
+        + 256u
+        + uint32_t(ch * 16);
+
+    tcgen05_st_32x32b_x16(
+        a_tmem,
+        packed_state
+    );
+
+    tcgen05_wait_st();
+    tcgen05_fence_before_thread_sync();
+
+    __syncthreads();
+
+    // Prime stage zero. Later iterations load chunk+1
+    // into the other stage while current-stage MMA executes.
+    if (tid == 0) {
+        int const first_ws_idx =
+            head * total_tiles
+            + sequence * kTilesPerSequence;
+
+        auto const* first_q_source =
+            reinterpret_cast<
+                cutlass::bfloat16_t const*
+            >(q_workspace)
+            + int64_t(first_ws_idx)
+                * int64_t(kChunk * kD);
+
+        tmem_k2_mbar_arrive_expect_tx(
+            &shared.q_ready[0],
+            kQTileBytes
+        );
+
+        cute::SM90_BULK_COPY_G2S::copy(
+            first_q_source,
+            reinterpret_cast<uint64_t*>(
+                &shared.q_ready[0]
+            ),
+            &shared.q_decayed[0][0][0][0],
+            int32_t(kQTileBytes)
+        );
+    }
+
+    // Keep the chunk loop rolled so this kernel measures
+    // one persistent CTA walking the sequence.
+#pragma unroll 1
+    for (
+        int chunk = 0;
+        chunk < kTilesPerSequence;
+        ++chunk
+    ) {
+        int const q_stage =
+            chunk & 1;
+
+        // A stage is reused once every two chunks.
+        uint32_t const q_phase =
+            uint32_t((chunk >> 1) & 1);
+
+        // Only the TCGen issue thread consumes q_decayed.
+        // The legacy U11-E/F instances retain the original
+        // all-thread wait for exact same-binary comparison.
+        if constexpr (SingleQConsumer) {
+            if (tid == 0) {
+                mbar_wait_parity(
+                    &shared.q_ready[q_stage],
+                    q_phase
+                );
+
+                cutlass::arch::
+                    fence_view_async_shared();
+            }
+        } else {
+            mbar_wait_parity(
+                &shared.q_ready[q_stage],
+                q_phase
+            );
+
+            cutlass::arch::
+                fence_view_async_shared();
+        }
+
+        // Start chunk+1 before issuing current-chunk MMA.
+        // The destination is the other shared-memory stage.
+        if (
+            tid == 0 &&
+            chunk + 1 < kTilesPerSequence
+        ) {
+            int const next_chunk =
+                chunk + 1;
+
+            int const next_stage =
+                next_chunk & 1;
+
+            int const next_ws_idx =
+                head * total_tiles
+                + sequence * kTilesPerSequence
+                + next_chunk;
+
+            auto const* next_q_source =
+                reinterpret_cast<
+                    cutlass::bfloat16_t const*
+                >(q_workspace)
+                + int64_t(next_ws_idx)
+                    * int64_t(kChunk * kD);
+
+            tmem_k2_mbar_arrive_expect_tx(
+                &shared.q_ready[next_stage],
+                kQTileBytes
+            );
+
+            cute::SM90_BULK_COPY_G2S::copy(
+                next_q_source,
+                reinterpret_cast<uint64_t*>(
+                    &shared.q_ready[next_stage]
+                ),
+                &shared.q_decayed[
+                    next_stage
+                ][0][0][0],
+                int32_t(kQTileBytes)
+            );
+        }
+
+        // Every consumer waits for the current q tile,
+        // and the preceding chunk has already finished
+        // before this shared slot is overwritten.
+        if constexpr (!SingleQConsumer) {
+            __syncthreads();
+        }
+
+        if (tid == 0) {
+            tcgen05_fence_after_thread_sync();
+
+            uint32_t const instruction_descriptor =
+                mma_inst_desc_f16(
+                    128,
+                    16,
+                    F16Type::BF16,
+                    F16Type::BF16,
+                    DType::F32,
+                    Major::K,
+                    Major::K
+                );
+
+#pragma unroll
+            for (
+                int k16 = 0;
+                k16 < 8;
+                ++k16
+            ) {
+                uint32_t const q_address =
+                    to_shared(
+                        &shared.q_decayed[
+                            q_stage
+                        ][
+                            k16 >> 2
+                        ][0][0]
+                    )
+                    + uint32_t(
+                        (k16 & 3) * 32
+                    );
+
+                uint64_t const q_descriptor =
+                    mma_smem_desc_k_major<
+                        uint16_t,
+                        64,
+                        128
+                    >(q_address);
+
+                tcgen05_mma_f16_atmem(
+                    taddr,
+                    taddr
+                        + 256u
+                        + uint32_t(k16 * 8),
+                    q_descriptor,
+                    instruction_descriptor,
+                    k16 != 0 ? 1u : 0u
+                );
+            }
+
+            tcgen05_commit_arrive(
+                &shared.mma_barrier
+            );
+        }
+
+        // One phase is consumed for every committed
+        // 128x16 product. Phase alternates 0,1,0,1...
+        // Only the 128 threads that drain TMEM-D need to
+        // wait for MMA completion. Other threads rendezvous
+        // at the post-drain CTA barrier.
+        if constexpr (DrainConsumersOnly) {
+            if (ch == 0) {
+                mbar_wait_parity(
+                    &shared.mma_barrier,
+                    uint32_t(chunk & 1)
+                );
+
+                tcgen05_fence_after_thread_sync();
+            }
+        } else {
+            mbar_wait_parity(
+                &shared.mma_barrier,
+                uint32_t(chunk & 1)
+            );
+
+            tcgen05_fence_after_thread_sync();
+        }
+
+        if constexpr (DrainOutput) {
+            if (ch == 0) {
+                uint32_t result[16];
+
+                tcgen05_ld_32x32b_x16(
+                    taddr + lane_hi,
+                    result[0],
+                    result[1],
+                    result[2],
+                    result[3],
+                    result[4],
+                    result[5],
+                    result[6],
+                    result[7],
+                    result[8],
+                    result[9],
+                    result[10],
+                    result[11],
+                    result[12],
+                    result[13],
+                    result[14],
+                    result[15]
+                );
+
+                tcgen05_wait_ld();
+
+    #pragma unroll
+                for (
+                    int n = 0;
+                    n < kChunk;
+                    ++n
+                ) {
+                    float const value =
+                        __uint_as_float(
+                            result[n]
+                        );
+
+                    int const token =
+                        sequence * 1024
+                        + chunk * kChunk
+                        + n;
+
+                    size_t const output_offset =
+                        (
+                            size_t(token) * size_t(H)
+                            + size_t(head)
+                        ) * size_t(kD)
+                        + size_t(value_index);
+
+                    output[output_offset] =
+                        cutlass::bfloat16_t(value);
+                }
+            }
+        }
+
+        // Complete all TMEM drains before the next q tile
+        // overwrites the single shared-memory slot.
+        // Only threads that performed tcgen05.ld need the
+        // before-thread-sync fence. The CTA barrier itself
+        // still includes all 512 threads.
+        if constexpr (DrainConsumersOnly) {
+            if (ch == 0) {
+                tcgen05_fence_before_thread_sync();
+            }
+        } else {
+            tcgen05_fence_before_thread_sync();
+        }
+
+        __syncthreads();
+    }
+
+    if (warp == 0) {
+        tcgen05_dealloc(
+            taddr,
+            512
+        );
+    }
+
+    tcgen05_relinquish();
+#endif
+}
+
+}  // namespace flash_kda_sm103_tmem

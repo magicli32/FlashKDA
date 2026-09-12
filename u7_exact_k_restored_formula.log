@@ -1,0 +1,61 @@
+                Tensor r_qd = make_tensor_like<BF16>(s_qd);
+                Tensor r_kd = make_tensor_like<BF16>(s_kd);
+                #pragma unroll
+                for (int v = 0; v < 2; ++v) {
+                    float g = reg_g[tile_idx][v];
+                    BF16 q = reg_q[tile_idx][v];
+                    BF16 k = reg_k[tile_idx][v];
+                    BF16 exp_cumsum = BF16(ex2_approx_ftz_f32(g));
+                    r_qd(0, v) = q * exp_cumsum * BF16(scale);
+                    r_kd(0, v) = k * exp_cumsum;
+                }
+                cute::copy(AutoVectorizingCopy{}, r_qd, s_qd);
+                cute::copy(AutoVectorizingCopy{}, r_kd, s_kd);
+
+                Tensor r_ki = make_tensor_like<BF16>(s_ki);
+                Tensor r_kr = make_tensor_like<BF16>(s_kr);
+                #pragma unroll
+                for (int v = 0; v < 2; ++v) {
+                    float g = reg_g[tile_idx][v];
+                    BF16 k = reg_k[tile_idx][v];
+                    BF16 inv_cumsum = BF16(ex2_approx_ftz_f32(-g));
+                    r_ki(0, v) = k * inv_cumsum;
+                    r_kr(0, v) = k * inv_cumsum * BF16(reg_gt[tile_idx][v]);
+                }
+                cute::copy(AutoVectorizingCopy{}, r_ki, s_ki);
+                cute::copy(AutoVectorizingCopy{}, r_kr, s_kr);
+            }
+        }
+
+    }
+    __syncthreads();
+
+    Tensor L = make_tensor(make_smem_ptr(shared_storage.L.begin()), LMLayout{});
+    Tensor Mqk = make_tensor(make_smem_ptr(shared_storage.Mqk.begin()), LMLayout{});
+    Tensor L_fp16 = make_tensor(make_smem_ptr(reinterpret_cast<FP16*>(shared_storage.L.begin())), LMLayout{});
+
+// L_Mqk
+    if (compute_tid < 32) {
+        mma_m16n16_bf16bf16fp16_1warp(k_decayed, k_inv, L_fp16, compute_tid);
+    } else if (compute_tid >= 32 && compute_tid < 64) {
+        mma_m16n16_bf16bf16bf16_1warp(q_decayed, k_inv, Mqk, compute_tid - 32);
+    }
+    __syncthreads();
+
+    Tensor INV = make_tensor(make_smem_ptr(shared_storage.INV.begin()), LMLayout{});
+    Tensor INV_fp16 = make_tensor(make_smem_ptr(reinterpret_cast<FP16*>(shared_storage.INV.begin())), LMLayout{});
+
+// tril_IL + INV = I - L (merged, same thread same element)
+    if (compute_tid < 256) {
+        const int col_block_size = 8;
+        int block_idx = compute_tid / (CHUNK * col_block_size);
+        int i = (compute_tid / col_block_size) % CHUNK;
+        int j = compute_tid % col_block_size + block_idx * col_block_size;
+        if (i <= j) {
+            L_fp16(i, j) = FP16::bitcast(0);
+        } else {
+            L_fp16(i, j) = L_fp16(i, j) * FP16(sigmoid_tanh_approx_f32(float(beta_tile(beta_smem_offset + i))));
+        }
+        if (i < j) {
+            Mqk(i, j) = BF16::bitcast(0);
+        }

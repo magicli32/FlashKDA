@@ -1,0 +1,92 @@
+        }
+        // INV = I - L (same thread reads L(i,j) it just wrote)
+        FP16 x = L_fp16(i, j);
+        INV_fp16(i, j) = (i == j ? FP16(1.0f) - x : -x);
+    }
+    __syncthreads();
+
+// inv (Neumann series, fused in registers)
+    neumann_inv_fused_1warp(L_fp16, INV_fp16, INV, compute_tid);
+    // Fence + sync combined: completion + TMA visibility
+    cutlass::arch::fence_view_async_shared();
+    __syncthreads();
+    int ws_idx = head_idx * total_tiles + global_tile_idx;
+
+    // P0-H:
+    // TMA store completion is thread-local, so use one elected lane
+    // from warp 0 as the sole TMA issuer / waiter / ready publisher.
+    //
+    // All lanes in warp 0 participate in elect_one_sync(); other
+    // warps skip it uniformly.
+    bool tma_store_leader = false;
+    if (threadIdx.x < 32) {
+        tma_store_leader = cute::elect_one_sync();
+    }
+
+    if (tma_store_leader) {
+        // P1-B: publish the byte image of each shared-memory tensor
+        // directly into its private workspace slot.
+        //
+        // K2 restores the exact same byte image into the same shared-memory
+        // layout, so no TensorMap coordinate interpretation is needed here.
+
+        BF16* k_decayed_dst =
+            ws_raw.k_decayed + int64_t(ws_idx) * (CHUNK * D);
+        cute::SM90_BULK_COPY_S2G::copy(
+            shared_storage.k_decayed.begin(),
+            k_decayed_dst,
+            int32_t(CHUNK * D * sizeof(BF16)));
+        tma_store_arrive();
+
+        BF16* q_decayed_dst =
+            ws_raw.q_decayed + int64_t(ws_idx) * (CHUNK * D);
+        cute::SM90_BULK_COPY_S2G::copy(
+            shared_storage.q_decayed.begin(),
+            q_decayed_dst,
+            int32_t(CHUNK * D * sizeof(BF16)));
+        tma_store_arrive();
+
+        BF16* k_restored_dst =
+            ws_raw.k_restored + int64_t(ws_idx) * (CHUNK * D);
+        cute::SM90_BULK_COPY_S2G::copy(
+            shared_storage.k_restored.begin(),
+            k_restored_dst,
+            int32_t(CHUNK * D * sizeof(BF16)));
+        tma_store_arrive();
+
+        float* g_total_dst =
+            ws_raw.g_total + int64_t(ws_idx) * D;
+        cute::SM90_BULK_COPY_S2G::copy(
+            shared_storage.g_total.begin(),
+            g_total_dst,
+            int32_t(D * sizeof(float)));
+        tma_store_arrive();
+
+        BF16* inv_dst =
+            ws_raw.inv + int64_t(ws_idx) * (CHUNK * CHUNK);
+        cute::SM90_BULK_COPY_S2G::copy(
+            shared_storage.INV.begin(),
+            inv_dst,
+            int32_t(CHUNK * CHUNK * sizeof(BF16)));
+        tma_store_arrive();
+
+        BF16* mqk_dst =
+            ws_raw.mqk + int64_t(ws_idx) * (CHUNK * CHUNK);
+        cute::SM90_BULK_COPY_S2G::copy(
+            shared_storage.Mqk.begin(),
+            mqk_dst,
+            int32_t(CHUNK * CHUNK * sizeof(BF16)));
+        tma_store_arrive();
+
+        // Wait only on the thread that issued the six TMA stores.
+        // wait<0> guarantees its prior bulk async groups are complete.
+        tma_store_wait<0>();
+
+        // Publish this workspace tile only after all asynchronous TMA
+        // stores have completed.
+        cuda::atomic_ref<uint32_t, cuda::thread_scope_device>
+            ready_ref(ws_ready[ws_idx]);
+
+        ready_ref.store(1u, cuda::memory_order_release);
+    }
+}

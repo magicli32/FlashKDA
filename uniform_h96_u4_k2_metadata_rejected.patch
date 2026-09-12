@@ -1,0 +1,202 @@
+diff --git a/csrc/smxx/fwd_kernel2.cuh b/csrc/smxx/fwd_kernel2.cuh
+index f59d949..36799e7 100644
+--- a/csrc/smxx/fwd_kernel2.cuh
++++ b/csrc/smxx/fwd_kernel2.cuh
+@@ -136,7 +136,8 @@ template <
+     bool HasStateIn = true,
+     bool HasStateOut = true,
+     bool StateFP32 = false,
+-    bool IsVarlen = true
++    bool IsVarlen = true,
++    bool UniformVarlenFast = false
+ >
+ __global__ void __maxnreg__(120) _flash_kda_fwd_recurrence_bf16_shared(
+     CUTE_GRID_CONSTANT TmaLoadV const tma_load_v,
+@@ -229,7 +230,7 @@ __global__ void __maxnreg__(120) _flash_kda_fwd_recurrence_bf16_shared(
+     int64_t bos, eos;
+     int tile_base;
+ 
+-    if constexpr (IsVarlen) {
++    if constexpr (IsVarlen && !UniformVarlenFast) {
+         bos = cu_seqlens[seq_idx];
+         eos = cu_seqlens[seq_idx + 1];
+         // Compute tile_base via linear scan (no host-precomputed table)
+@@ -238,6 +239,7 @@ __global__ void __maxnreg__(120) _flash_kda_fwd_recurrence_bf16_shared(
+             tile_base += (int(cu_seqlens[i + 1] - cu_seqlens[i]) + CHUNK - 1) / CHUNK;
+         }
+     } else {
++        // Fixed-length and UniformVarlenFast use direct arithmetic.
+         int T_seq = T_total / N;
+         bos = seq_idx * T_seq;
+         eos = bos + T_seq;
+@@ -861,7 +863,8 @@ template <
+     bool HasStateOut = true,
+     bool StateFP32 = false,
+     bool IsVarlen = true,
+-    bool DirectMixedInitial = false
++    bool DirectMixedInitial = false,
++    bool UniformVarlenFast = false
+ >
+ __global__ void __launch_bounds__(NumThreads, 1) _flash_kda_fwd_recurrence_bf16(
+     CUTE_GRID_CONSTANT TmaLoadV const tma_load_v,
+@@ -955,7 +958,7 @@ __global__ void __launch_bounds__(NumThreads, 1) _flash_kda_fwd_recurrence_bf16(
+     int64_t bos, eos;
+     int tile_base;
+ 
+-    if constexpr (IsVarlen) {
++    if constexpr (IsVarlen && !UniformVarlenFast) {
+         bos = cu_seqlens[seq_idx];
+         eos = cu_seqlens[seq_idx + 1];
+         // Compute tile_base via linear scan (no host-precomputed table)
+@@ -964,6 +967,7 @@ __global__ void __launch_bounds__(NumThreads, 1) _flash_kda_fwd_recurrence_bf16(
+             tile_base += (int(cu_seqlens[i + 1] - cu_seqlens[i]) + CHUNK - 1) / CHUNK;
+         }
+     } else {
++        // Fixed-length and UniformVarlenFast use direct arithmetic.
+         int T_seq = T_total / N;
+         bos = seq_idx * T_seq;
+         eos = bos + T_seq;
+@@ -2189,7 +2193,8 @@ template <
+     bool HasStateIn = true,
+     bool HasStateOut = true,
+     bool StateFP32 = false,
+-    bool IsVarlen = true
++    bool IsVarlen = true,
++    bool UniformVarlenFast = false
+ >
+ __global__ void __launch_bounds__(NumThreads, 1) _flash_kda_fwd_recurrence(
+     CUTE_GRID_CONSTANT TmaLoadV const tma_load_v,
+@@ -2282,7 +2287,7 @@ __global__ void __launch_bounds__(NumThreads, 1) _flash_kda_fwd_recurrence(
+     int64_t bos, eos;
+     int tile_base;
+ 
+-    if constexpr (IsVarlen) {
++    if constexpr (IsVarlen && !UniformVarlenFast) {
+         bos = cu_seqlens[seq_idx];
+         eos = cu_seqlens[seq_idx + 1];
+         // Compute tile_base via linear scan (no host-precomputed table)
+@@ -2291,6 +2296,7 @@ __global__ void __launch_bounds__(NumThreads, 1) _flash_kda_fwd_recurrence(
+             tile_base += (int(cu_seqlens[i + 1] - cu_seqlens[i]) + CHUNK - 1) / CHUNK;
+         }
+     } else {
++        // Fixed-length and UniformVarlenFast use direct arithmetic.
+         int T_seq = T_total / N;
+         bos = seq_idx * T_seq;
+         eos = bos + T_seq;
+diff --git a/csrc/smxx/fwd_launch.cu b/csrc/smxx/fwd_launch.cu
+index c45f829..bcced1b 100644
+--- a/csrc/smxx/fwd_launch.cu
++++ b/csrc/smxx/fwd_launch.cu
+@@ -478,9 +478,38 @@ void launch_fwd(
+         using SharedStorageK2T = SharedStorageK2<K2L, kInputStages, kOutputStages>;
+         int smem_size_k2 = sizeof(SharedStorageK2T);
+ 
++        bool use_uniform_h96_k2_fast = false;
++
++        if constexpr (IsVarlen) {
++            const char* fast_env =
++                std::getenv("FLASH_KDA_UNIFORM_H96_K2_FAST");
++
++            use_uniform_h96_k2_fast =
++                fast_env != nullptr &&
++                std::atoi(fast_env) != 0 &&
++                N == 8 &&
++                T_total == 8192 &&
++                H == 96 &&
++                D == 128;
++        }
++
+         auto kernel2 = [&]() {
+             if constexpr (StateFP32) {
+                 // FP32 keeps the P1/P0-L codegen path.
++                if (use_uniform_h96_k2_fast) {
++                    return _flash_kda_fwd_recurrence<
++                        decltype(tma_load_v), decltype(tma_load_beta2),
++                        decltype(tma_load_ws_kd), decltype(tma_load_ws_qd), decltype(tma_load_ws_kr),
++                        decltype(tma_load_ws_gt), decltype(tma_load_ws_inv), decltype(tma_load_ws_mqk),
++                        decltype(tma_load_initial_state),
++                        decltype(tma_store_final_state),
++                        decltype(tma_store_out),
++                        CHUNK, D, kInputStages, kOutputStages, kK2Threads,
++                        HasStateIn, HasStateOut, StateFP32, IsVarlen,
++                        true
++                    >;
++                }
++
+                 return _flash_kda_fwd_recurrence<
+                     decltype(tma_load_v), decltype(tma_load_beta2),
+                     decltype(tma_load_ws_kd), decltype(tma_load_ws_qd), decltype(tma_load_ws_kr),
+@@ -491,10 +520,24 @@ void launch_fwd(
+                     CHUNK, D, kInputStages, kOutputStages, kK2Threads,
+                     HasStateIn, HasStateOut, StateFP32, IsVarlen
+                 >;
+-		            } else if constexpr (HasStateIn && HasStateOut) {
+-                // Stateful BF16:
+-                // keep the P2 register-resident recurrent-state winner.
++            } else if constexpr (HasStateIn && HasStateOut) {
++                // Stateful BF16: keep the register-resident state path.
+                 if (use_direct_initial) {
++                    if (use_uniform_h96_k2_fast) {
++                        return _flash_kda_fwd_recurrence_bf16<
++                            decltype(tma_load_v), decltype(tma_load_beta2),
++                            decltype(tma_load_ws_kd), decltype(tma_load_ws_qd), decltype(tma_load_ws_kr),
++                            decltype(tma_load_ws_gt), decltype(tma_load_ws_inv), decltype(tma_load_ws_mqk),
++                            decltype(tma_load_initial_state),
++                            decltype(tma_load_correction_state),
++                            decltype(tma_store_final_state),
++                            decltype(tma_store_out),
++                            CHUNK, D, kInputStages, kOutputStages, kK2Threads,
++                            HasStateIn, HasStateOut, StateFP32, IsVarlen,
++                            true, true
++                        >;
++                    }
++
+                     return _flash_kda_fwd_recurrence_bf16<
+                         decltype(tma_load_v), decltype(tma_load_beta2),
+                         decltype(tma_load_ws_kd), decltype(tma_load_ws_qd), decltype(tma_load_ws_kr),
+@@ -509,6 +552,21 @@ void launch_fwd(
+                     >;
+                 }
+ 
++                if (use_uniform_h96_k2_fast) {
++                    return _flash_kda_fwd_recurrence_bf16<
++                        decltype(tma_load_v), decltype(tma_load_beta2),
++                        decltype(tma_load_ws_kd), decltype(tma_load_ws_qd), decltype(tma_load_ws_kr),
++                        decltype(tma_load_ws_gt), decltype(tma_load_ws_inv), decltype(tma_load_ws_mqk),
++                        decltype(tma_load_initial_state),
++                        decltype(tma_load_correction_state),
++                        decltype(tma_store_final_state),
++                        decltype(tma_store_out),
++                        CHUNK, D, kInputStages, kOutputStages, kK2Threads,
++                        HasStateIn, HasStateOut, StateFP32, IsVarlen,
++                        false, true
++                    >;
++                }
++
+                 return _flash_kda_fwd_recurrence_bf16<
+                     decltype(tma_load_v), decltype(tma_load_beta2),
+                     decltype(tma_load_ws_kd), decltype(tma_load_ws_qd), decltype(tma_load_ws_kr),
+@@ -522,8 +580,21 @@ void launch_fwd(
+                     false
+                 >;
+             } else {
+-                // No-state / one-sided BF16:
+-                // use the P1 shared-state maxnreg(120) kernel.
++                // No-state / one-sided BF16: shared-state maxnreg(120).
++                if (use_uniform_h96_k2_fast) {
++                    return _flash_kda_fwd_recurrence_bf16_shared<
++                        decltype(tma_load_v), decltype(tma_load_beta2),
++                        decltype(tma_load_ws_kd), decltype(tma_load_ws_qd), decltype(tma_load_ws_kr),
++                        decltype(tma_load_ws_gt), decltype(tma_load_ws_inv), decltype(tma_load_ws_mqk),
++                        decltype(tma_load_initial_state),
++                        decltype(tma_store_final_state),
++                        decltype(tma_store_out),
++                        CHUNK, D, kInputStages, kOutputStages, kK2Threads,
++                        HasStateIn, HasStateOut, StateFP32, IsVarlen,
++                        true
++                    >;
++                }
++
+                 return _flash_kda_fwd_recurrence_bf16_shared<
+                     decltype(tma_load_v), decltype(tma_load_beta2),
+                     decltype(tma_load_ws_kd), decltype(tma_load_ws_qd), decltype(tma_load_ws_kr),

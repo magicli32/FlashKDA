@@ -1,0 +1,17 @@
+diff --git a/csrc/smxx/fwd_launch.cu b/csrc/smxx/fwd_launch.cu
+index c45f829..e28819f 100644
+--- a/csrc/smxx/fwd_launch.cu
++++ b/csrc/smxx/fwd_launch.cu
+@@ -30,7 +30,11 @@ void launch_fwd(
+     cudaStream_t stream
+ ) {
+     using BF16 = cutlass::bfloat16_t;
+-    constexpr int kInputStages = 3;
++    // U6-A B300 stage diagnostic:
++    // use one additional TMA input stage while retaining two
++    // output stages. Estimated K2 dynamic smem remains below
++    // the two-CTA-per-SM shared-memory boundary on B300.
++    constexpr int kInputStages = 4;
+     constexpr int kOutputStages = 2;
+     constexpr int CHUNK = 16;
+ 

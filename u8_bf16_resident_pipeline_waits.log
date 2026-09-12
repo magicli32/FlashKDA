@@ -1,0 +1,318 @@
+31-    CUTE_GRID_CONSTANT TmaLoadCorrectionState const tma_load_correction_state,
+32-    CUTE_GRID_CONSTANT TmaStoreState const tma_store_final_state,
+33-    CUTE_GRID_CONSTANT TmaStoreOut const tma_store_out,
+34-    cutlass::bfloat16_t* out_raw_ptr,
+35-    int T_total,
+36-    int H,
+37-    int N,
+38-    int final_state_N,
+39-    int64_t const* cu_seqlens,
+40-    int total_tiles,
+41:    uint32_t* ws_ready,
+42-    K1WorkspaceRawPointers ws_raw
+43-) {
+44-    using BF16 = cutlass::bfloat16_t;
+45-    using FP16 = cutlass::half_t;
+46-    using Layouts = K2Layouts<D, CHUNK>;
+47-    using MMALayout = typename Layouts::MMALayout;
+48-    using TransposedMMALayout = typename Layouts::TransposedMMALayout;
+49-    using VOLayout = typename Layouts::VOLayout;
+50-    using TransposedVOLayout = typename Layouts::TransposedVOLayout;
+51-    using BetaSmemLayout = typename Layouts::BetaSmemLayout;
+--
+72-#endif
+73-        0u;
+74-
+75-    // --- shared memory
+76-    extern __shared__ __align__(128) unsigned char shared_mem[];
+77-    using SharedStorageT = SharedStorageK2<Layouts, InputStages, OutputStages>;
+78-    SharedStorageT& shared_storage = *reinterpret_cast<SharedStorageT*>(shared_mem);
+79-
+80-    // --- warp specialization
+81-    int warp_id = threadIdx.x / kWarpSize;
+82:    WarpRole warp_role = WarpRole::NonParticipant;
+83-    if (warp_id < kComputeThreads / kWarpSize) {
+84:        warp_role = WarpRole::MMA;
+85-    } else if (warp_id < kComputeThreads / kWarpSize + 1) {
+86:        warp_role = WarpRole::LOAD_QKG;
+87-    } else if (warp_id < kComputeThreads / kWarpSize + 2) {
+88:        warp_role = WarpRole::STORE;
+89-    }
+90-
+91-#ifndef TMA_DISABLE_ALL
+92-    using LoadPipelineState = cutlass::PipelineState<InputStages>;
+93-    using LoadPipeline = cutlass::PipelineTmaAsync<InputStages>;
+94:    LoadPipeline load_pipeline = make_load_pipeline<InputStages>(
+95:        shared_storage.load_pipeline,
+96-        kTmaTransactionBytes,
+97:        warp_role, 1, kComputeThreads
+98-    );
+99-    using StorePipelineState = cutlass::PipelineState<OutputStages>;
+100-    using StorePipeline = cutlass::PipelineAsync<OutputStages>;
+101:    StorePipeline store_pipeline = make_store_pipeline<OutputStages>(
+102:        shared_storage.store_pipeline,
+103:        warp_role, kComputeThreads, 1
+104-    );
+105-#endif
+106-
+107-    // --- per-block sequence info
+108-    int seq_idx  = blockIdx.x;
+109-    int head_idx = blockIdx.y;
+110-    int64_t bos, eos;
+111-    int tile_base;
+112-
+113-    if constexpr (IsVarlen) {
+--
+144-                (seq_idx == 3 || seq_idx == 7);
+145-        }
+146-
+147-        if (use_correction_state) {
+148-            // CP3 consumes ht_buffer[2].
+149-            // CP7 consumes ht_buffer[6].
+150-            //
+151-            // Load FP32 correction state, then convert to the
+152-            // BF16 resident recurrent representation in shared memory.
+153-            if (
+154:                warp_role == WarpRole::LOAD_QKG &&
+155-                lane_predicate
+156-            ) {
+157-                using BarrierType =
+158-                    cutlass::arch::
+159-                        ClusterTransactionBarrier::ValueType;
+160-
+161-                constexpr uint32_t
+162-                    kFP32StateTransactionBytes =
+163-                        cute::cosize_v<StateSmemLayout>
+164-                        * sizeof(float);
+--
+281-            if constexpr (DirectMixedInitial) {
+282-                state_seq_idx =
+283-                    (seq_idx < 3)
+284-                        ? seq_idx
+285-                        : seq_idx - 1;
+286-
+287-                state_N = 6;
+288-            }
+289-
+290-            if (
+291:                warp_role == WarpRole::LOAD_QKG &&
+292-                lane_predicate
+293-            ) {
+294-                using BarrierType =
+295-                    cutlass::arch::
+296-                        ClusterTransactionBarrier::ValueType;
+297-
+298-                constexpr uint32_t
+299-                    kStateTransactionBytes =
+300-                        cute::cosize_v<StateSmemLayout>
+301-                        * sizeof(BF16);
+--
+384-        }
+385-
+386-    } else if constexpr (HasStateIn && StateFP32) {
+387-        // Existing generic FP32 state path.
+388-        using FP32StateSmemLayout =
+389-            typename Layouts::FP32StateSmemLayout;
+390-        using TMAFP32StateSmemLayout =
+391-            typename Layouts::TMAFP32StateSmemLayout;
+392-
+393-        if (
+394:            warp_role == WarpRole::LOAD_QKG &&
+395-            lane_predicate
+396-        ) {
+397-            using BarrierType =
+398-                cutlass::arch::
+399-                    ClusterTransactionBarrier::ValueType;
+400-
+401-            constexpr uint32_t
+402-                kFP32StateTransactionBytes =
+403-                    cute::cosize_v<StateSmemLayout>
+404-                    * sizeof(float);
+--
+520-            fence_view_async_shared();
+521-
+522-        __syncthreads();
+523-    }
+524-#endif
+525-
+526-#ifndef TMA_DISABLE_ALL
+527-    __syncthreads();
+528-
+529-    // --- LOAD warp: issue TMA loads for v, beta, and workspace intermediates
+530:    if (warp_role == WarpRole::LOAD_QKG && lane_predicate) {
+531-        Tensor g_v = tma_load_v.get_tma_tensor(make_shape(H, T_total, D));
+532-        Tensor g_beta = tma_load_beta.get_tma_tensor(make_shape(H * T_total));
+533-
+534-        LoadPipelineState load_write = cutlass::make_producer_start_state<LoadPipeline>();
+535-        auto cta_tma_load_v = tma_load_v.get_slice(Int<0>{});
+536-        auto cta_tma_load_beta = tma_load_beta.get_slice(Int<0>{});
+537-
+538-        for (int t = 0; t < t_tiles; ++t) {
+539:            load_pipeline.producer_acquire(load_write);
+540-            using LoadBarrierType = typename LoadPipeline::ProducerBarrierType;
+541:            LoadBarrierType* tma_barrier = load_pipeline.producer_get_barrier(load_write);
+542-            int stage = load_write.index();
+543-            int ws_idx = head_idx * total_tiles + tile_base + t;
+544-
+545-            // TMA load v
+546-            auto v_off = g_v.layout()(head_idx, int(bos) + t * CHUNK, 0);
+547-            Tensor g_v_tile = make_tensor(g_v.data() + v_off,
+548-                make_layout(make_shape(Int<1>{}, Int<CHUNK>{}, Int<D>{}), stride(g_v.layout())));
+549-            Tensor s_v_tile = make_tensor(make_smem_ptr(shared_storage.input[stage].v.begin()), TMAVOLayout{});
+550-            cute::copy(tma_load_v.with(*tma_barrier),
+551-                cta_tma_load_v.partition_S(g_v_tile), cta_tma_load_v.partition_D(s_v_tile));
+--
+556-            auto beta_off = g_beta.layout()(beta_aligned);
+557-            Tensor g_beta_tile = make_tensor(g_beta.data() + beta_off, BetaSmemLayout{});
+558-            Tensor s_beta_tile = make_tensor(make_smem_ptr(shared_storage.input[stage].beta.begin()), TMABetaSmemLayout{});
+559-            cute::copy(tma_load_beta.with(*tma_barrier),
+560-                cta_tma_load_beta.partition_S(g_beta_tile), cta_tma_load_beta.partition_D(s_beta_tile));
+561-
+562-#if BLOCK_LEVEL_K1 >= 0
+563-            // v and beta do not depend on K1. They have already been issued
+564-            // before waiting for the corresponding workspace tile.
+565-            cuda::atomic_ref<uint32_t, cuda::thread_scope_device>
+566:                ready_ref(ws_ready[ws_idx]);
+567-
+568-            while (ready_ref.load(cuda::memory_order_acquire) == 0u) {
+569:                __nanosleep(64);
+570-            }
+571-
+572-            // The readiness flag is observed by the generic proxy while the
+573-            // following workspace reads are issued through the TMA async proxy.
+574-            asm volatile("fence.proxy.async.global;" ::: "memory");
+575-#endif
+576-
+577-            // P1-B:
+578-            // K1 stored the exact shared-memory byte images.
+579-            // Restore those byte images directly into the matching K2
+--
+611-                int32_t(CHUNK * CHUNK * sizeof(BF16)));
+612-
+613-            cute::SM90_BULK_COPY_G2S::copy(
+614-                ws_raw.mqk + int64_t(ws_idx) * (CHUNK * CHUNK),
+615-                reinterpret_cast<uint64_t*>(tma_barrier),
+616-                shared_storage.input[stage].Mqk.begin(),
+617-                int32_t(CHUNK * CHUNK * sizeof(BF16)));
+618-
+619-            ++load_write;
+620-        }
+621:        load_pipeline.producer_tail(load_write);
+622-    }
+623-#endif
+624-
+625-    // --- MMA warps
+626:    if (warp_role == WarpRole::MMA) {
+627-        cutlass::arch::NamedBarrier compute_barrier(kComputeThreads, 0);
+628-#ifndef TMA_DISABLE_ALL
+629-        LoadPipelineState load_read;
+630-        StorePipelineState out_write = cutlass::make_producer_start_state<StorePipeline>();
+631-#endif
+632-        int compute_tid = threadIdx.x;
+633-
+634-        // ========================================================
+635-        // P2: register-resident recurrent state
+636-        //
+--
+698-                copy(
+699-                    resident_load_c,
+700-                    resident_thr_load_c.partition_S(state_block),
+701-                    resident_thr_load_c.retile_D(
+702-                        resident_state[bi][m]));
+703-            }
+704-        }
+705-
+706-        for (int t = 0; t < t_tiles; ++t) {
+707-#ifndef TMA_DISABLE_ALL
+708:            store_pipeline.producer_acquire(out_write);
+709:            load_pipeline.consumer_wait(load_read);
+710-            int load_stage = load_read.index();
+711-            int out_stage = out_write.index();
+712-#else
+713-            constexpr int load_stage = 0;
+714-            constexpr int out_stage = 0;
+715-#endif
+716-
+717-            Tensor v_tile = make_tensor(make_smem_ptr(shared_storage.input[load_stage].v.begin()), VOLayout{});
+718-            Tensor beta_tile = make_tensor(make_smem_ptr(shared_storage.input[load_stage].beta.begin()), BetaSmemLayout{});
+719-            int beta_smem_offset = (head_idx * T_total + int(bos) + t * CHUNK) & 7;
+--
+1161-                                    s_block));
+1162-                        }
+1163-                    }
+1164-                }
+1165-            }
+1166-            }
+1167-            compute_barrier.arrive_and_wait();
+1168-
+1169-#ifndef TMA_DISABLE_ALL
+1170-            cutlass::arch::fence_view_async_shared();
+1171:            store_pipeline.producer_commit(out_write);
+1172:            load_pipeline.consumer_release(load_read);
+1173-            ++load_read;
+1174-            ++out_write;
+1175-#endif
+1176-        }
+1177-    }
+1178-
+1179-#ifndef TMA_DISABLE_ALL
+1180:    if (warp_role == WarpRole::STORE && lane_predicate) {
+1181-        Tensor g_out = tma_store_out.get_tma_tensor(make_shape(H, T_total, D));
+1182-        auto cta_tma_store = tma_store_out.get_slice(Int<0>{});
+1183-        StorePipelineState out_read;
+1184-        for (int t = 0; t < t_tiles; ++t) {
+1185:            store_pipeline.consumer_wait(out_read);
+1186-            int stage = out_read.index();
+1187-            int actual_len = min(CHUNK, seq_len - t * CHUNK);
+1188-
+1189-            BF16* out_stage_ptr = shared_storage.output[stage].out.begin();
+1190-
+1191-            if (actual_len < CHUNK) {
+1192-                // Manual store for tail tile to avoid overwriting next sequence
+1193-                // Only one thread (lane_predicate) runs here, so loop over all D
+1194-                Tensor s_out = make_tensor(make_smem_ptr(out_stage_ptr), VOLayout{});
+1195-                for (int row = 0; row < actual_len; ++row) {
+--
+1206-                Tensor s_out_tile = make_tensor(make_smem_ptr(out_stage_ptr), TMAVOLayout{});
+1207-                cute::copy(
+1208-                    tma_store_out,
+1209-                    cta_tma_store.partition_S(s_out_tile),
+1210-                    cta_tma_store.partition_D(g_out_tile)
+1211-                );
+1212-                tma_store_arrive();
+1213-            }
+1214-
+1215-            tma_store_wait<0>();
+1216:            store_pipeline.consumer_release(out_read);
+1217-            ++out_read;
+1218-        }
+1219-
+1220-	        if constexpr (HasStateOut && !StateFP32) {
+1221-            int final_seq_idx = seq_idx;
+1222-            bool write_final_state = true;
+1223-
+1224-            // M9-A diagnostic:
+1225-            // Mixed H96 CP-P2 has:
+1226-            // cp0 -> raw0
+--
+1298-
+1299-        __syncthreads();  // all warps sync — pipeline smem now free
+1300-
+1301-        smem_cvt_bf16_to_fp32<StateSmemLayout, FP32StateSmemLayout, D, NumThreads>(
+1302-            shared_storage.state_acc.begin(),
+1303-            reinterpret_cast<float*>(shared_storage.state_fp32_buf),
+1304-            threadIdx.x);
+1305-        cutlass::arch::fence_view_async_shared();  // generic-proxy writes -> visible to async proxy (TMA)
+1306-        __syncthreads();  // conversion complete
+1307-
+1308:        if (warp_role == WarpRole::STORE && lane_predicate) {
+1309-            Tensor g_final = tma_store_final_state.get_tma_tensor(make_shape(N * H, D, D));
+1310-            auto state_off = g_final.layout()(seq_idx * H + head_idx, 0, 0);
+1311-            Tensor g_final_tile = make_tensor(g_final.data() + state_off,
+1312-                make_layout(make_shape(Int<1>{}, Int<D>{}, Int<D>{}), stride(g_final.layout())));
+1313-            Tensor s_fp32 = make_tensor(
+1314-                make_smem_ptr(reinterpret_cast<float*>(shared_storage.state_fp32_buf)),
+1315-                TMAFP32StateSmemLayout{});
+1316-
+1317-            auto cta_tma_store_state = tma_store_final_state.get_slice(Int<0>{});
+1318-            cute::copy(

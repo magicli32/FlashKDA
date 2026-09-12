@@ -1,0 +1,44 @@
+54:    // Phase B: k_decayed, q_decayed, k_inv, L, INV, Mqk alive
+63:            alignas(128) cute::ArrayEngine<BF16, cute::cosize_v<MMALayout>> k_decayed;
+64:            alignas(128) cute::ArrayEngine<BF16, cute::cosize_v<MMALayout>> q_decayed;
+76:        alignas(128) cute::ArrayEngine<BF16, cute::cosize_v<MMALayout>> k_restored;
+80:        alignas(128) cute::ArrayEngine<float, cute::cosize_v<GTotalLayout>> g_total;
+127:    CUTE_GRID_CONSTANT TmaStoreWsKD const tma_store_ws_kd,
+128:    CUTE_GRID_CONSTANT TmaStoreWsQD const tma_store_ws_qd,
+129:    CUTE_GRID_CONSTANT TmaStoreWsKR const tma_store_ws_kr,
+130:    CUTE_GRID_CONSTANT TmaStoreWsGT const tma_store_ws_gt,
+131:    CUTE_GRID_CONSTANT TmaStoreWsINV const tma_store_ws_inv,
+132:    CUTE_GRID_CONSTANT TmaStoreWsMqk const tma_store_ws_mqk,
+359:            shared_storage.g_total.begin()[col] = sum;
+376:    Tensor k_restored = make_tensor(make_smem_ptr(shared_storage.k_restored.begin()), MMALayout{});
+377:    Tensor k_decayed = make_tensor(make_smem_ptr(shared_storage.k_decayed.begin()), MMALayout{});
+378:    Tensor q_decayed = make_tensor(make_smem_ptr(shared_storage.q_decayed.begin()), MMALayout{});
+380:    Tensor g_total = make_tensor(make_smem_ptr(shared_storage.g_total.begin()), GTotalLayout{});
+382:    // exp_g_total: compute exp(g_total) in smem before decay_apply
+384:        float x = g_total(compute_tid);
+385:        g_total(compute_tid) = ex2_approx_ftz_f32(x);
+425:                Tensor tile_gt = local_tile(g_total, vec8_1d, make_coord(col_tile));
+452:        // Sync before writing to union'd smem (q/k/g → k_decayed/q_decayed/k_inv)
+465:                Tensor tile_qd = local_tile(q_decayed, vec8_2d, make_coord(row, col_tile));
+466:                Tensor tile_kd = local_tile(k_decayed, vec8_2d, make_coord(row, col_tile));
+467:                Tensor tile_kr = local_tile(k_restored, vec8_2d, make_coord(row, col_tile));
+513:        mma_m16n16_bf16bf16fp16_1warp(k_decayed, k_inv, L_fp16, compute_tid);
+515:        mma_m16n16_bf16bf16bf16_1warp(q_decayed, k_inv, Mqk, compute_tid - 32);
+567:        BF16* k_decayed_dst =
+568:            ws_raw.k_decayed + int64_t(ws_idx) * (CHUNK * D);
+570:            shared_storage.k_decayed.begin(),
+571:            k_decayed_dst,
+575:        BF16* q_decayed_dst =
+576:            ws_raw.q_decayed + int64_t(ws_idx) * (CHUNK * D);
+578:            shared_storage.q_decayed.begin(),
+579:            q_decayed_dst,
+583:        BF16* k_restored_dst =
+584:            ws_raw.k_restored + int64_t(ws_idx) * (CHUNK * D);
+586:            shared_storage.k_restored.begin(),
+587:            k_restored_dst,
+591:        float* g_total_dst =
+592:            ws_raw.g_total + int64_t(ws_idx) * D;
+594:            shared_storage.g_total.begin(),
+595:            g_total_dst,
+600:            ws_raw.inv + int64_t(ws_idx) * (CHUNK * CHUNK);
+608:            ws_raw.mqk + int64_t(ws_idx) * (CHUNK * CHUNK);

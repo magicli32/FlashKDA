@@ -1,0 +1,105 @@
+#pragma once
+
+#include "utils.cuh"
+
+template <int D, int CHUNK = 16>
+struct K1Layouts {
+    using QKLayout = decltype(make_layout(make_shape(Int<CHUNK>{}, Int<D>{}), LayoutRight{}));
+    using GLayout = decltype(make_layout(make_shape(Int<CHUNK>{}, Int<D>{}), LayoutRight{}));
+    using MMALayout = decltype(tile_to_shape(
+        GMMA::Layout_K_INTER_Atom<cute::bfloat16_t>{},
+        make_shape(Int<CHUNK>{}, Int<D>{}),
+        LayoutLeft{}
+    ));
+    using BetaSmemLayout = Layout<Shape<Int<32>>, Stride<Int<1>>>;
+    using GTotalLayout = Layout<Shape<Int<D>>, Stride<Int<1>>>;
+    using LMLayout = decltype(tile_to_shape(
+        GMMA::Layout_K_INTER_Atom<cute::bfloat16_t>{},
+        make_shape(Int<CHUNK>{}, Int<CHUNK>{}),
+        LayoutLeft{}
+    ));
+    using TransposedLMLayout = decltype(tile_to_shape(
+        GMMA::Layout_MN_INTER_Atom<cute::bfloat16_t>{},
+        make_shape(Int<CHUNK>{}, Int<CHUNK>{}),
+        LayoutRight{}
+    ));
+
+    using TMABetaSmemLayout = BetaSmemLayout;  // 1D TMA, no dummy dim
+    using TMAQKLayout = decltype(prepend(QKLayout{}));
+    using TMAVOLayout = decltype(composition(
+        MMALayout{}.layout_a(),
+        MMALayout{}.offset(),
+        prepend(MMALayout{}.layout_b())
+    ));
+    using TMAGLayout = decltype(prepend(GLayout{}));
+    using TMALMLayout = decltype(composition(
+        LMLayout{}.layout_a(),
+        LMLayout{}.offset(),
+        prepend(LMLayout{}.layout_b())
+    ));
+    using TMAGTotalSmemLayout = decltype(prepend(GTotalLayout{}));
+};
+
+template <class Layouts>
+struct SharedStorageK1 {
+    using BF16 = cutlass::bfloat16_t;
+    using QKLayout = typename Layouts::QKLayout;
+    using GLayout = typename Layouts::GLayout;
+    using BetaSmemLayout = typename Layouts::BetaSmemLayout;
+    using GTotalLayout = typename Layouts::GTotalLayout;
+    using LMLayout = typename Layouts::LMLayout;
+    using MMALayout = typename Layouts::MMALayout;
+
+    // Phase A: q, k, g alive
+    // Phase B: k_decayed, q_decayed, k_inv, L, INV, Mqk alive
+    // These don't overlap → union saves ~14KB shared memory
+    union {
+        struct {
+            alignas(128) cute::ArrayEngine<BF16, cute::cosize_v<QKLayout>> q;
+            alignas(128) cute::ArrayEngine<BF16, cute::cosize_v<QKLayout>> k;
+            alignas(128) cute::ArrayEngine<float, cute::cosize_v<GLayout>> g;
+        };
+        struct {
+            alignas(128) cute::ArrayEngine<BF16, cute::cosize_v<MMALayout>> k_decayed;
+            alignas(128) cute::ArrayEngine<BF16, cute::cosize_v<MMALayout>> q_decayed;
+            alignas(128) cute::ArrayEngine<BF16, cute::cosize_v<MMALayout>> k_inv;
+            alignas(128) cute::ArrayEngine<BF16, cute::cosize_v<LMLayout>> L;
+            alignas(128) cute::ArrayEngine<BF16, cute::cosize_v<LMLayout>> INV;
+            alignas(128) cute::ArrayEngine<BF16, cute::cosize_v<LMLayout>> Mqk;
+        };
+    };
+
+    alignas(128) cute::ArrayEngine<BF16, cute::cosize_v<BetaSmemLayout>> beta;
+
+    union {
+        alignas(128) cute::ArrayEngine<BF16, cute::cosize_v<QKLayout>> g_bf16;      // TMA load target
+        alignas(128) cute::ArrayEngine<BF16, cute::cosize_v<MMALayout>> k_restored;
+    };
+    union {
+        alignas(128) cute::ArrayEngine<float, cute::cosize_v<GTotalLayout>> dt_bias;  // TMA load target
+        alignas(128) cute::ArrayEngine<float, cute::cosize_v<GTotalLayout>> g_total;
+    };
+    alignas(16) cutlass::arch::ClusterTransactionBarrier tma_load_barrier;
+};
+
+// Build prefix-sum of per-sequence tile counts, so Kernel 1 can map
+// global_tile_idx -> seq_idx with an O(log N) binary search instead of an
+// O(N) linear scan per CTA in varlen mode.
+__global__ void _flash_kda_build_tile_prefix(
+    int64_t const* __restrict__ cu_seqlens,
+    int N,
+    int chunk,
+    int* __restrict__ tile_prefix
+) {
+    if (threadIdx.x == 0) {
+        int acc = 0;
+        tile_prefix[0] = 0;
+        for (int i = 0; i < N; ++i) {
+            int slen = int(cu_seqlens[i + 1] - cu_seqlens[i]);
+            acc += (slen + chunk - 1) / chunk;
+            tile_prefix[i + 1] = acc;
+        }
+    }
+}
+
+// ==================== Kernel 1: Prepare ====================

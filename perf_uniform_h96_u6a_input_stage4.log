@@ -1,0 +1,12 @@
+varlen shape=[8192,96,128] seq_lens=[1300, 547, 2048, 963, 271, 3063] warmup=30 iters=200 repeats=5
+  flash_kda (bf16 state) : mean=0.8031 ms, min=0.7474 ms, max=0.8664 ms
+  flash_kda (no state)   : mean=0.8174 ms, min=0.7544 ms, max=0.8637 ms
+  flash_kda (fp32 state) : mean=0.8464 ms, min=0.7923 ms, max=0.9029 ms
+  chunk_kda : mean=2.3867 ms, min=2.3762 ms, max=2.4917 ms
+  chunk_gated_delta_rule : mean=1.3093 ms, min=1.3030 ms, max=1.3994 ms
+varlen shape=[8192,96,128] seq_lens=[1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024] warmup=30 iters=200 repeats=5
+  flash_kda (bf16 state) : mean=0.6231 ms, min=0.6191 ms, max=0.6571 ms
+  flash_kda (no state)   : mean=0.6544 ms, min=0.6516 ms, max=0.6701 ms
+  flash_kda (fp32 state) : mean=0.6861 ms, min=0.6824 ms, max=0.7048 ms
+  chunk_kda : mean=2.3431 ms, min=2.3332 ms, max=2.4530 ms
+  chunk_gated_delta_rule : mean=1.2586 ms, min=1.2529 ms, max=1.3513 ms

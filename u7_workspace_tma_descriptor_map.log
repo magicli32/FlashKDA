@@ -1,0 +1,82 @@
+39:    using WS = WorkspaceSizes<CHUNK, D>;
+121:    K1WorkspaceRawPointers ws_raw{
+167:    auto tma_store_ws_kd  = make_tma_copy(SM90_TMA_STORE{}, m_ws_kd, TMAVOLayout{});
+168:    auto tma_store_ws_qd  = make_tma_copy(SM90_TMA_STORE{}, m_ws_qd, TMAVOLayout{});
+169:    auto tma_store_ws_kr  = make_tma_copy(SM90_TMA_STORE{}, m_ws_kr, TMAVOLayout{});
+170:    auto tma_store_ws_gt  = make_tma_copy(SM90_TMA_STORE{}, m_ws_gt, TMAGTotalSmemLayout{});
+171:    auto tma_store_ws_inv = make_tma_copy(SM90_TMA_STORE{}, m_ws_inv, TMALMLayout{});
+172:    auto tma_store_ws_mqk = make_tma_copy(SM90_TMA_STORE{}, m_ws_mqk, TMALMLayout{});
+178:    auto tma_load_ws_kd  = make_tma_copy(SM90_TMA_LOAD{}, m_ws_kd, TMAVOLayout{});
+179:    auto tma_load_ws_qd  = make_tma_copy(SM90_TMA_LOAD{}, m_ws_qd, TMAVOLayout{});
+180:    auto tma_load_ws_kr  = make_tma_copy(SM90_TMA_LOAD{}, m_ws_kr, TMAVOLayout{});
+181:    auto tma_load_ws_gt  = make_tma_copy(SM90_TMA_LOAD{}, m_ws_gt, TMAGTotalSmemLayout{});
+182:    auto tma_load_ws_inv = make_tma_copy(SM90_TMA_LOAD{}, m_ws_inv, TMALMLayout{});
+183:    auto tma_load_ws_mqk = make_tma_copy(SM90_TMA_LOAD{}, m_ws_mqk, TMALMLayout{});
+410:            decltype(tma_store_ws_kd), decltype(tma_store_ws_qd), decltype(tma_store_ws_kr),
+411:            decltype(tma_store_ws_gt), decltype(tma_store_ws_inv), decltype(tma_store_ws_mqk),
+421:                    decltype(tma_store_ws_kd), decltype(tma_store_ws_qd), decltype(tma_store_ws_kr),
+422:                    decltype(tma_store_ws_gt), decltype(tma_store_ws_inv), decltype(tma_store_ws_mqk),
+459:            tma_store_ws_kd, tma_store_ws_qd, tma_store_ws_kr,
+460:            tma_store_ws_gt, tma_store_ws_inv, tma_store_ws_mqk,
+462:            A_log_ptr, gate_scale, ws_tile_prefix, nullptr, ws_ready, ws_raw
+486:                    decltype(tma_load_ws_kd), decltype(tma_load_ws_qd), decltype(tma_load_ws_kr),
+487:                    decltype(tma_load_ws_gt), decltype(tma_load_ws_inv), decltype(tma_load_ws_mqk),
+500:                        decltype(tma_load_ws_kd), decltype(tma_load_ws_qd), decltype(tma_load_ws_kr),
+501:                        decltype(tma_load_ws_gt), decltype(tma_load_ws_inv), decltype(tma_load_ws_mqk),
+514:                    decltype(tma_load_ws_kd), decltype(tma_load_ws_qd), decltype(tma_load_ws_kr),
+515:                    decltype(tma_load_ws_gt), decltype(tma_load_ws_inv), decltype(tma_load_ws_mqk),
+529:                    decltype(tma_load_ws_kd), decltype(tma_load_ws_qd), decltype(tma_load_ws_kr),
+530:                    decltype(tma_load_ws_gt), decltype(tma_load_ws_inv), decltype(tma_load_ws_mqk),
+558:                tma_load_ws_kd,
+559:                tma_load_ws_qd,
+560:                tma_load_ws_kr,
+561:                tma_load_ws_gt,
+562:                tma_load_ws_inv,
+563:                tma_load_ws_mqk,
+576:                ws_raw
+587:                tma_load_ws_kd,
+588:                tma_load_ws_qd,
+589:                tma_load_ws_kr,
+590:                tma_load_ws_gt,
+591:                tma_load_ws_inv,
+592:                tma_load_ws_mqk,
+604:                ws_raw
+654:    using WS = WorkspaceSizes<CHUNK, D>;
+692:    auto tma_load_ws_kd = make_tma_copy(SM90_TMA_LOAD{}, m_ws_kd, TMAVOLayout{});
+693:    auto tma_load_ws_kr = make_tma_copy(SM90_TMA_LOAD{}, m_ws_kr, TMAVOLayout{});
+694:    auto tma_load_ws_gt = make_tma_copy(SM90_TMA_LOAD{}, m_ws_gt, TMAGTotalSmemLayout{});
+695:    auto tma_load_ws_inv = make_tma_copy(SM90_TMA_LOAD{}, m_ws_inv, TMALMLayout{});
+705:        decltype(tma_load_ws_kd), decltype(tma_load_ws_kr),
+706:        decltype(tma_load_ws_gt), decltype(tma_load_ws_inv),
+726:        tma_load_ws_kd, tma_load_ws_kr,
+727:        tma_load_ws_gt, tma_load_ws_inv,
+762:    using WS = WorkspaceSizes<CHUNK, D>;
+798:    auto tma_load_ws_kd = make_tma_copy(SM90_TMA_LOAD{}, m_ws_kd, TMAVOLayout{});
+799:    auto tma_load_ws_kr = make_tma_copy(SM90_TMA_LOAD{}, m_ws_kr, TMAVOLayout{});
+800:    auto tma_load_ws_gt = make_tma_copy(SM90_TMA_LOAD{}, m_ws_gt, TMAGTotalSmemLayout{});
+801:    auto tma_load_ws_inv = make_tma_copy(SM90_TMA_LOAD{}, m_ws_inv, TMALMLayout{});
+810:        decltype(tma_load_ws_kd), decltype(tma_load_ws_kr),
+811:        decltype(tma_load_ws_gt), decltype(tma_load_ws_inv),
+823:        tma_load_ws_kd, tma_load_ws_kr,
+824:        tma_load_ws_gt, tma_load_ws_inv,
+865:    using WS = WorkspaceSizes<CHUNK, D>;
+922:    K1WorkspaceRawPointers ws_raw{
+1059:    auto tma_store_ws_kd =
+1065:    auto tma_store_ws_qd =
+1071:    auto tma_store_ws_kr =
+1077:    auto tma_store_ws_gt =
+1083:    auto tma_store_ws_inv =
+1089:    auto tma_store_ws_mqk =
+1110:            decltype(tma_store_ws_kd),
+1111:            decltype(tma_store_ws_qd),
+1112:            decltype(tma_store_ws_kr),
+1113:            decltype(tma_store_ws_gt),
+1114:            decltype(tma_store_ws_inv),
+1115:            decltype(tma_store_ws_mqk),
+1181:            tma_store_ws_kd,
+1182:            tma_store_ws_qd,
+1183:            tma_store_ws_kr,
+1184:            tma_store_ws_gt,
+1185:            tma_store_ws_inv,
+1186:            tma_store_ws_mqk,
+1198:            ws_raw);

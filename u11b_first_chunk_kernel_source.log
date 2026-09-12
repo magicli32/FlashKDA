@@ -1,0 +1,324 @@
+     1	#pragma once
+     2	
+     3	#include "tcgen05_sm103_probe.cuh"
+     4	
+     5	namespace flash_kda_sm103_tmem {
+     6	
+     7	// U11-A first production-shaped SM103 K2 prototype.
+     8	//
+     9	// One 512-thread CTA owns one (sequence, head).
+    10	// This first version processes only the sequence's first
+    11	// CHUNK=16 tile:
+    12	//
+    13	//   D[v,n] = initial_state^T[v,k]
+    14	//              @ q_decayed^T[k,n]
+    15	//
+    16	// The result is drained from TMEM, converted to BF16 and
+    17	// stored into the corresponding first output chunk.
+    18	//
+    19	// The established K2 launches immediately afterward and
+    20	// overwrites these diagnostic output values. Therefore this
+    21	// kernel can be profiled without changing the public result.
+    22	struct alignas(1024)
+    23	TmemK2FirstChunkSharedStorage {
+    24	    // Exact q_decayed K_INTER/SWZ128 physical image.
+    25	    alignas(1024)
+    26	    __nv_bfloat16 q_decayed[2][16][64];
+    27	
+    28	    alignas(8)
+    29	    uint64_t mma_barrier;
+    30	
+    31	    uint32_t tmem_addr;
+    32	};
+    33	
+    34	__global__ void
+    35	__launch_bounds__(512, 1)
+    36	_flash_kda_tmem_k2_first_chunk(
+    37	    void const* initial_state,
+    38	    void const* q_workspace,
+    39	    cutlass::bfloat16_t* output,
+    40	    int total_tiles,
+    41	    int H
+    42	) {
+    43	#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ == 1030)
+    44	    __shared__
+    45	    TmemK2FirstChunkSharedStorage shared;
+    46	
+    47	    int const tid = int(threadIdx.x);
+    48	    int const warp = tid >> 5;
+    49	    int const lane = tid & 31;
+    50	
+    51	    int const band =
+    52	        (warp & 3) * 32;
+    53	
+    54	    int const ch =
+    55	        warp >> 2;
+    56	
+    57	    int const value_index =
+    58	        band + lane;
+    59	
+    60	    int const sequence =
+    61	        int(blockIdx.x) / H;
+    62	
+    63	    int const head =
+    64	        int(blockIdx.x) % H;
+    65	
+    66	    constexpr int kD = 128;
+    67	    constexpr int kChunk = 16;
+    68	    constexpr int kTilesPerSequence = 64;
+    69	    constexpr int kQTileBytes =
+    70	        kChunk * kD * int(sizeof(uint16_t));
+    71	
+    72	    int const ws_idx =
+    73	        head * total_tiles
+    74	        + sequence * kTilesPerSequence;
+    75	
+    76	    size_t const state_matrix_offset =
+    77	        size_t(sequence * H + head)
+    78	        * size_t(kD * kD);
+    79	
+    80	    auto const* state =
+    81	        reinterpret_cast<
+    82	            cutlass::bfloat16_t const*
+    83	        >(initial_state)
+    84	        + state_matrix_offset;
+    85	
+    86	    if (tid == 0) {
+    87	        mbar_init(
+    88	            &shared.mma_barrier,
+    89	            1
+    90	        );
+    91	    }
+    92	
+    93	    // Restore the exact 4096-byte real q_decayed tile.
+    94	    auto const* q_source =
+    95	        reinterpret_cast<uint4 const*>(
+    96	            reinterpret_cast<char const*>(
+    97	                q_workspace
+    98	            )
+    99	            + size_t(ws_idx)
+   100	                * size_t(kQTileBytes)
+   101	        );
+   102	
+   103	    auto* q_destination =
+   104	        reinterpret_cast<uint4*>(
+   105	            &shared.q_decayed[0][0][0]
+   106	        );
+   107	
+   108	    static_assert(
+   109	        kQTileBytes % int(sizeof(uint4)) == 0
+   110	    );
+   111	
+   112	    constexpr int kQVectors =
+   113	        kQTileBytes / int(sizeof(uint4));
+   114	
+   115	    for (
+   116	        int vector = tid;
+   117	        vector < kQVectors;
+   118	        vector += 512
+   119	    ) {
+   120	        q_destination[vector] =
+   121	            q_source[vector];
+   122	    }
+   123	
+   124	    // TMEM allocation is warp-collective.
+   125	    if (warp == 0) {
+   126	        tcgen05_alloc(
+   127	            to_shared(&shared.tmem_addr),
+   128	            512
+   129	        );
+   130	    }
+   131	
+   132	    __syncthreads();
+   133	
+   134	    uint32_t const taddr =
+   135	        shared.tmem_addr;
+   136	
+   137	    uint32_t const lane_hi =
+   138	        uint32_t(band) << 16;
+   139	
+   140	    // Distributed S^T register ownership:
+   141	    //
+   142	    //   thread(value_index, ch) owns
+   143	    //   S^T[value_index][ch*32 : ch*32+32].
+   144	    uint32_t packed_state[16];
+   145	
+   146	#pragma unroll
+   147	    for (int pair_index = 0;
+   148	         pair_index < 16;
+   149	         ++pair_index) {
+   150	        int const k0 =
+   151	            ch * 32 + 2 * pair_index;
+   152	
+   153	        int const k1 =
+   154	            k0 + 1;
+   155	
+   156	        float const value0 =
+   157	            bf16_to_f32(
+   158	                state[
+   159	                    k0 * kD
+   160	                    + value_index
+   161	                ]
+   162	            );
+   163	
+   164	        float const value1 =
+   165	            bf16_to_f32(
+   166	                state[
+   167	                    k1 * kD
+   168	                    + value_index
+   169	                ]
+   170	            );
+   171	
+   172	        __nv_bfloat162 pair =
+   173	            __floats2bfloat162_rn(
+   174	                value0,
+   175	                value1
+   176	            );
+   177	
+   178	        packed_state[pair_index] =
+   179	            *reinterpret_cast<
+   180	                uint32_t const*
+   181	            >(&pair);
+   182	    }
+   183	
+   184	    uint32_t const a_tmem =
+   185	        taddr
+   186	        + lane_hi
+   187	        + 256u
+   188	        + uint32_t(ch * 16);
+   189	
+   190	    tcgen05_st_32x32b_x16(
+   191	        a_tmem,
+   192	        packed_state
+   193	    );
+   194	
+   195	    tcgen05_wait_st();
+   196	    tcgen05_fence_before_thread_sync();
+   197	
+   198	    __syncthreads();
+   199	
+   200	    // One elected thread issues the eight K16 MMA steps.
+   201	    if (tid == 0) {
+   202	        tcgen05_fence_after_thread_sync();
+   203	
+   204	        uint32_t const instruction_descriptor =
+   205	            mma_inst_desc_f16(
+   206	                128,
+   207	                16,
+   208	                F16Type::BF16,
+   209	                F16Type::BF16,
+   210	                DType::F32,
+   211	                Major::K,
+   212	                Major::K
+   213	            );
+   214	
+   215	#pragma unroll
+   216	        for (int k16 = 0;
+   217	             k16 < 8;
+   218	             ++k16) {
+   219	            uint32_t const q_address =
+   220	                to_shared(
+   221	                    &shared.q_decayed[
+   222	                        k16 >> 2
+   223	                    ][0][0]
+   224	                )
+   225	                + uint32_t(
+   226	                    (k16 & 3) * 32
+   227	                );
+   228	
+   229	            uint64_t const q_descriptor =
+   230	                mma_smem_desc_k_major<
+   231	                    uint16_t,
+   232	                    64,
+   233	                    128
+   234	                >(q_address);
+   235	
+   236	            tcgen05_mma_f16_atmem(
+   237	                taddr,
+   238	                taddr
+   239	                    + 256u
+   240	                    + uint32_t(k16 * 8),
+   241	                q_descriptor,
+   242	                instruction_descriptor,
+   243	                k16 != 0 ? 1u : 0u
+   244	            );
+   245	        }
+   246	
+   247	        tcgen05_commit_arrive(
+   248	            &shared.mma_barrier
+   249	        );
+   250	    }
+   251	
+   252	    mbar_wait_parity(
+   253	        &shared.mma_barrier,
+   254	        0
+   255	    );
+   256	
+   257	    tcgen05_fence_after_thread_sync();
+   258	
+   259	    // N=16 occupies one TMEM output quarter. The four
+   260	    // ch=0 warps drain all 128 value rows.
+   261	    if (ch == 0) {
+   262	        uint32_t result[16];
+   263	
+   264	        tcgen05_ld_32x32b_x16(
+   265	            taddr
+   266	                + lane_hi,
+   267	            result[0],
+   268	            result[1],
+   269	            result[2],
+   270	            result[3],
+   271	            result[4],
+   272	            result[5],
+   273	            result[6],
+   274	            result[7],
+   275	            result[8],
+   276	            result[9],
+   277	            result[10],
+   278	            result[11],
+   279	            result[12],
+   280	            result[13],
+   281	            result[14],
+   282	            result[15]
+   283	        );
+   284	
+   285	        tcgen05_wait_ld();
+   286	
+   287	#pragma unroll
+   288	        for (int n = 0; n < kChunk; ++n) {
+   289	            float const value =
+   290	                __uint_as_float(
+   291	                    result[n]
+   292	                );
+   293	
+   294	            int const token =
+   295	                sequence * 1024 + n;
+   296	
+   297	            size_t const output_offset =
+   298	                (
+   299	                    size_t(token) * size_t(H)
+   300	                    + size_t(head)
+   301	                ) * size_t(kD)
+   302	                + size_t(value_index);
+   303	
+   304	            output[output_offset] =
+   305	                cutlass::bfloat16_t(value);
+   306	        }
+   307	    }
+   308	
+   309	    tcgen05_fence_before_thread_sync();
+   310	
+   311	    __syncthreads();
+   312	
+   313	    if (warp == 0) {
+   314	        tcgen05_dealloc(
+   315	            taddr,
+   316	            512
+   317	        );
+   318	    }
+   319	
+   320	    tcgen05_relinquish();
+   321	#endif
+   322	}
+   323	
+   324	}  // namespace flash_kda_sm103_tmem

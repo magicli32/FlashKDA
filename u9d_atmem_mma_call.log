@@ -1,0 +1,26 @@
+    ptx::mbar_wait_parity(&mb_tma, (c - c0) & 1);
+    if (tid == 0 || tid == 32) {  // dual issuers, disjoint D regions
+      // phase closed: arm the next chunk into the other buffer
+      if (tid == 0 && c + 1 < c0 + per_seg) tma_issue(c + 1);
+      ptx::tcgen05_fence_after_thread_sync();
+      const uint32_t idesc1 = ptx::mma_inst_desc_dense<ptx::MmaDenseKind::F16>(
+          128, 64, ptx::F16Type::BF16, ptx::F16Type::BF16, ptx::DType::F32, ptx::Major::K, ptx::Major::K);
+      if (tid == 0) {
+#pragma unroll
+        for (int k16 = 0; k16 < 8; ++k16) {
+          const uint64_t db = ptx::mma_smem_desc_k_major<uint16_t, 64, 128>(
+              ptx::to_shared(&sPneg[buf_idx][k16 >> 2][0][0]) + (k16 & 3) * 32);
+          ptx::tcgen05_mma_f16_atmem(taddr, taddr + (256u + k16 * 8), db, idesc1, k16 ? 1u : 0u);
+        }
+        ptx::tcgen05_commit_arrive(&mb_p1);
+      } else {
+#pragma unroll
+        for (int k16 = 0; k16 < 8; ++k16) {  // P3: o^T = S^T@qdec^T
+          const uint64_t db = ptx::mma_smem_desc_k_major<uint16_t, 64, 128>(
+              ptx::to_shared(&sQd[buf_idx][k16 >> 2][0][0]) + (k16 & 3) * 32);
+          ptx::tcgen05_mma_f16_atmem(taddr + 384u, taddr + (256u + k16 * 8), db, idesc1, k16 ? 1u : 0u);
+        }
+        ptx::tcgen05_commit_arrive(&mb_o);
+      }
+    }
+    ptx::mbar_wait_parity(&mb_p1, (c - c0) & 1);  // U-drain: P1 alone

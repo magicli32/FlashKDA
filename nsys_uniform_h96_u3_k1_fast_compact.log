@@ -1,0 +1,12 @@
+K1           start=3376968850 dur_us=283.458 grid=512x96 block=256 regs=32 stream=7
+K2_bf16      start=3377259764 dur_us=340.386 grid=8x96 block=192 regs=166 stream=7
+K1           start=3377821943 dur_us=279.361 grid=512x96 block=256 regs=32 stream=7
+K2_bf16      start=3378104216 dur_us=339.586 grid=8x96 block=192 regs=166 stream=7
+K1           start=3378577563 dur_us=278.498 grid=512x96 block=256 regs=32 stream=7
+K2_no_state  start=3378863837 dur_us=371.010 grid=8x96 block=192 regs=118 stream=7
+K1           start=3379337663 dur_us=277.186 grid=512x96 block=256 regs=32 stream=7
+K2_no_state  start=3379617473 dur_us=371.298 grid=8x96 block=192 regs=118 stream=7
+K1           start=3380208132 dur_us=281.185 grid=512x96 block=256 regs=32 stream=7
+K2_fp32      start=3380496773 dur_us=415.683 grid=8x96 block=192 regs=130 stream=7
+K1           start=3380984328 dur_us=277.186 grid=512x96 block=256 regs=32 stream=7
+K2_fp32      start=3381263050 dur_us=416.034 grid=8x96 block=192 regs=130 stream=7

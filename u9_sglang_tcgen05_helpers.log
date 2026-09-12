@@ -1,0 +1,70 @@
+155:static __device__ __forceinline__ void tcgen05_alloc(uint32_t smem_addr_for_taddr, uint32_t n_cols) {
+159:static __device__ __forceinline__ void tcgen05_dealloc(uint32_t taddr, uint32_t n_cols) {
+162:static __device__ __forceinline__ void tcgen05_relinquish() {
+166:tcgen05_st_32x32b_x4(uint32_t taddr, uint32_t r0, uint32_t r1, uint32_t r2, uint32_t r3) {
+170:static __device__ __forceinline__ void tcgen05_st_32x32b_x8(
+192:static __device__ __forceinline__ void tcgen05_st_32x32b_x16(uint32_t taddr, const uint32_t* r) {
+214:static __device__ __forceinline__ void tcgen05_ld_32x32b_x8(
+230:static __device__ __forceinline__ void tcgen05_ld_32x32b_x16(
+270:static __device__ __forceinline__ void tcgen05_ld_32x32b_x32(uint32_t taddr, uint32_t* r) {
+311:static __device__ __forceinline__ void tcgen05_wait_ld() {
+314:static __device__ __forceinline__ void tcgen05_wait_st() {
+317:static __device__ __forceinline__ void tcgen05_commit_arrive(uint64_t* bar) {
+339:tcgen05_mma_f16_atmem(uint32_t d, uint32_t a_tmem, uint64_t desc_b, uint32_t inst_desc_high, uint32_t scale_c) {
+370:mma_smem_desc_k_major(uint32_t addr, uint32_t base_offset = 0) {
+426:__host__ __device__ static __forceinline__ constexpr uint32_t mma_inst_desc_dense(
+673:    if (warp == 0) ptx::tcgen05_alloc(ptx::to_shared(&s_taddr), 512);
+1158:    const uint32_t idw = ptx::mma_inst_desc_dense<ptx::MmaDenseKind::F16>(
+1161:    const uint32_t idwm = ptx::mma_inst_desc_dense<ptx::MmaDenseKind::F16>(
+1173:        const uint64_t da = ptx::mma_smem_desc_k_major<uint16_t, 64, 128>(ptx::to_shared(&sp.b.kdT[0][0]) + k16 * 32);
+1183:          const uint64_t da = ptx::mma_smem_desc_k_major<uint16_t, 64, 128>(
+1185:          const uint64_t db = ptx::mma_smem_desc_k_major<uint16_t, 64, 128>(ptx::to_shared(&sp.b.kdT[0][0]) + k16 * 32);
+1188:      ptx::tcgen05_commit_arrive(&mb_f);
+1211:      ptx::tcgen05_ld_32x32b_x8(
+1213:      ptx::tcgen05_wait_ld();
+1237:          ptx::tcgen05_ld_32x32b_x8(
+1239:          ptx::tcgen05_wait_ld();
+1277:            ptx::tcgen05_st_32x32b_x4(
+1283:          ptx::tcgen05_wait_st();
+1299:                  ptx::mma_smem_desc_k_major<uint32_t, 8, 32>(ptx::to_shared(&sp.g.sLt[s][0][0])),
+1302:          ptx::tcgen05_commit_arrive(&mb_f);
+1320:    if (warp == 0) ptx::tcgen05_dealloc(s_taddr, 512);
+1321:    ptx::tcgen05_relinquish();
+1458:  if (warp == 0) ptx::tcgen05_alloc(ptx::to_shared(&s_taddr), 512);
+1499:      ptx::tcgen05_st_32x32b_x4(taddr + lane_hi + uint32_t(256 + ch * 32 + c4), iv[0], iv[1], iv[2], iv[3]);
+1500:      ptx::tcgen05_st_32x32b_x4(taddr + lane_hi + uint32_t(ch * 32 + c4), sv[0], sv[1], sv[2], sv[3]);
+1502:    ptx::tcgen05_wait_st();
+1536:              ptx::mma_smem_desc_k_major<uint32_t, 8, 32>(ptx::to_shared(bL) + uint32_t(s * 4096)),
+1539:        ptx::tcgen05_commit_arrive(&S.mb_cmL);
+1545:              ptx::mma_smem_desc_k_major<uint32_t, 8, 32>(ptx::to_shared(bC) + uint32_t(s * 4096)),
+1548:        ptx::tcgen05_commit_arrive(&S.mb_cmC);
+1559:      ptx::tcgen05_ld_32x32b_x8(
+1561:      ptx::tcgen05_wait_ld();
+1618:      ptx::tcgen05_st_32x32b_x16(a1st, hw);
+1653:    ptx::tcgen05_wait_st();
+1665:      const uint32_t idesc1 = ptx::mma_inst_desc_dense<ptx::MmaDenseKind::F16>(
+1670:          const uint64_t db = ptx::mma_smem_desc_k_major<uint16_t, 64, 128>(
+1672:          ptx::tcgen05_mma_f16_atmem(taddr, taddr + (256u + k16 * 8), db, idesc1, k16 ? 1u : 0u);
+1674:        ptx::tcgen05_commit_arrive(&mb_p1);
+1678:          const uint64_t db = ptx::mma_smem_desc_k_major<uint16_t, 64, 128>(
+1680:          ptx::tcgen05_mma_f16_atmem(taddr + 384u, taddr + (256u + k16 * 8), db, idesc1, k16 ? 1u : 0u);
+1682:        ptx::tcgen05_commit_arrive(&mb_o);
+1693:        ptx::tcgen05_ld_32x32b_x16(
+1711:        ptx::tcgen05_wait_ld();
+1720:      ptx::tcgen05_st_32x32b_x8(
+1722:      ptx::tcgen05_st_32x32b_x8(
+1725:    ptx::tcgen05_wait_st();
+1731:        const uint32_t idesc2 = ptx::mma_inst_desc_dense<ptx::MmaDenseKind::F16>(
+1737:                ptx::mma_smem_desc_k_major<uint16_t, 64, 128>(ptx::to_shared(&sKdT[buf_idx][0][0]) + k16 * 32);
+1738:            ptx::tcgen05_mma_f16_atmem(
+1741:        ptx::tcgen05_commit_arrive(&mb_p2);
+1743:        const uint32_t idesc4 = ptx::mma_inst_desc_dense<ptx::MmaDenseKind::F16>(
+1751:            const uint64_t db = ptx::mma_smem_desc_k_major<uint16_t, 64, 128>(ptx::to_shared(ab) + k16 * 32);
+1752:            ptx::tcgen05_mma_f16_atmem(taddr + 384u, taddr + (acol + k16 * 8), db, idesc4, 1u);
+1755:        ptx::tcgen05_commit_arrive(&mb_o);
+1764:      ptx::tcgen05_ld_32x32b_x32(taddr + lane_hi + uint32_t(64 + ch * 32), r);
+1765:      ptx::tcgen05_wait_ld();
+1775:      ptx::tcgen05_ld_32x32b_x16(
+1793:      ptx::tcgen05_wait_ld();
+1811:  if (warp == 0) ptx::tcgen05_dealloc(taddr, 512);
+1812:  ptx::tcgen05_relinquish();

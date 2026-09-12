@@ -1,0 +1,300 @@
+--
+benchmarks/generate_benchmark_md.py-1-#!/usr/bin/env python3
+benchmarks/generate_benchmark_md.py-2-"""
+benchmarks/generate_benchmark_md.py:3:Run ``bench_fwd.py`` twice (default ``H`` and ``--H 64``), parse stdout, and write
+benchmarks/generate_benchmark_md.py-4-a benchmark markdown report.
+benchmarks/generate_benchmark_md.py-5-
+benchmarks/generate_benchmark_md.py-6-Reports mean latency for ``flash_kda (fp32 state)`` and ``fla_chunk_kda`` (FLA
+benchmarks/generate_benchmark_md.py-7-``chunk_kda``), plus speedup ``chunk_mean / flash_mean``. Generated date is UTC,
+benchmarks/generate_benchmark_md.py-8-day precision only (YYYY-MM-DD).
+benchmarks/generate_benchmark_md.py-9-"""
+--
+benchmarks/generate_benchmark_md.py-35-)
+benchmarks/generate_benchmark_md.py-36-
+benchmarks/generate_benchmark_md.py-37-RE_HEADER_FIXED = re.compile(
+benchmarks/generate_benchmark_md.py-38-    r"^shape=\[(\d+),(\d+),(\d+)\] warmup=(\d+) iters=(\d+) repeats=(\d+)\s*$"
+benchmarks/generate_benchmark_md.py-39-)
+benchmarks/generate_benchmark_md.py-40-RE_HEADER_VARLEN = re.compile(
+benchmarks/generate_benchmark_md.py:41:    r"^varlen shape=\[(\d+),(\d+),(\d+)\] seq_lens=(\[[^\]]+\]) "
+benchmarks/generate_benchmark_md.py-42-    r"warmup=(\d+) iters=(\d+) repeats=(\d+)\s*$"
+benchmarks/generate_benchmark_md.py-43-)
+benchmarks/generate_benchmark_md.py-44-RE_RESULT = re.compile(
+benchmarks/generate_benchmark_md.py-45-    r"^\s+(.+?)\s*:\s*mean=([\d.]+) ms, min=([\d.]+) ms, max=([\d.]+) ms\s*$"
+benchmarks/generate_benchmark_md.py-46-)
+benchmarks/generate_benchmark_md.py-47-
+--
+benchmarks/generate_benchmark_md.py-61-        raise subprocess.CalledProcessError(proc.returncode, cmd, proc.stdout, proc.stderr)
+benchmarks/generate_benchmark_md.py-62-    return proc.stdout
+benchmarks/generate_benchmark_md.py-63-
+benchmarks/generate_benchmark_md.py-64-
+benchmarks/generate_benchmark_md.py-65-def parse_stdout(text: str) -> list[dict]:
+benchmarks/generate_benchmark_md.py-66-    """
+benchmarks/generate_benchmark_md.py:67:    Each case: kind, T,H,D, warmup, iters, repeats, seq_lens (varlen), optional
+benchmarks/generate_benchmark_md.py-68-    flash_mean_ms, chunk_mean_ms (floats).
+benchmarks/generate_benchmark_md.py-69-    """
+benchmarks/generate_benchmark_md.py-70-    cases: list[dict] = []
+benchmarks/generate_benchmark_md.py-71-    current: dict | None = None
+benchmarks/generate_benchmark_md.py-72-
+benchmarks/generate_benchmark_md.py-73-    def new_case_base(
+--
+benchmarks/generate_benchmark_md.py-76-        T: int,
+benchmarks/generate_benchmark_md.py-77-        H: int,
+benchmarks/generate_benchmark_md.py-78-        D: int,
+benchmarks/generate_benchmark_md.py-79-        warmup: int,
+benchmarks/generate_benchmark_md.py-80-        iters: int,
+benchmarks/generate_benchmark_md.py-81-        repeats: int,
+benchmarks/generate_benchmark_md.py:82:        seq_lens: str | None = None,
+benchmarks/generate_benchmark_md.py-83-    ) -> dict:
+benchmarks/generate_benchmark_md.py-84-        c: dict = {
+benchmarks/generate_benchmark_md.py-85-            "kind": kind,
+benchmarks/generate_benchmark_md.py-86-            "T": T,
+benchmarks/generate_benchmark_md.py-87-            "H": H,
+benchmarks/generate_benchmark_md.py-88-            "D": D,
+--
+benchmarks/generate_benchmark_md.py-90-            "iters": iters,
+benchmarks/generate_benchmark_md.py-91-            "repeats": repeats,
+benchmarks/generate_benchmark_md.py-92-            "flash_mean_ms": None,
+benchmarks/generate_benchmark_md.py-93-            "chunk_mean_ms": None,
+benchmarks/generate_benchmark_md.py-94-            "gdn_mean_ms": None,
+benchmarks/generate_benchmark_md.py-95-        }
+benchmarks/generate_benchmark_md.py:96:        if seq_lens is not None:
+benchmarks/generate_benchmark_md.py:97:            c["seq_lens"] = seq_lens
+benchmarks/generate_benchmark_md.py-98-        return c
+benchmarks/generate_benchmark_md.py-99-
+benchmarks/generate_benchmark_md.py-100-    for line in text.splitlines():
+benchmarks/generate_benchmark_md.py-101-        m = RE_HEADER_VARLEN.match(line)
+benchmarks/generate_benchmark_md.py-102-        if m:
+benchmarks/generate_benchmark_md.py-103-            if current is not None:
+benchmarks/generate_benchmark_md.py-104-                cases.append(current)
+benchmarks/generate_benchmark_md.py:105:            t, h, d, seq_lens, w, it, rep = m.groups()
+benchmarks/generate_benchmark_md.py-106-            current = new_case_base(
+benchmarks/generate_benchmark_md.py-107-                "varlen",
+benchmarks/generate_benchmark_md.py-108-                T=int(t),
+benchmarks/generate_benchmark_md.py-109-                H=int(h),
+benchmarks/generate_benchmark_md.py-110-                D=int(d),
+benchmarks/generate_benchmark_md.py-111-                warmup=int(w),
+benchmarks/generate_benchmark_md.py-112-                iters=int(it),
+benchmarks/generate_benchmark_md.py-113-                repeats=int(rep),
+benchmarks/generate_benchmark_md.py:114:                seq_lens=seq_lens,
+benchmarks/generate_benchmark_md.py-115-            )
+benchmarks/generate_benchmark_md.py-116-            continue
+benchmarks/generate_benchmark_md.py-117-
+benchmarks/generate_benchmark_md.py-118-        m = RE_HEADER_FIXED.match(line)
+benchmarks/generate_benchmark_md.py-119-        if m:
+benchmarks/generate_benchmark_md.py-120-            if current is not None:
+--
+benchmarks/generate_benchmark_md.py-145-    if current is not None:
+benchmarks/generate_benchmark_md.py-146-        cases.append(current)
+benchmarks/generate_benchmark_md.py-147-
+benchmarks/generate_benchmark_md.py-148-    return cases
+benchmarks/generate_benchmark_md.py-149-
+benchmarks/generate_benchmark_md.py-150-
+benchmarks/generate_benchmark_md.py:151:def _fmt_seq_lens(seq_lens_str: str) -> str:
+benchmarks/generate_benchmark_md.py:152:    """Uniform segment lengths become ``1024 x 8``; mixed lists keep the bracket form."""
+benchmarks/generate_benchmark_md.py-153-    try:
+benchmarks/generate_benchmark_md.py:154:        xs = ast.literal_eval(seq_lens_str)
+benchmarks/generate_benchmark_md.py-155-    except (ValueError, SyntaxError):
+benchmarks/generate_benchmark_md.py:156:        return seq_lens_str
+benchmarks/generate_benchmark_md.py-157-    if not isinstance(xs, list) or not xs:
+benchmarks/generate_benchmark_md.py:158:        return seq_lens_str
+benchmarks/generate_benchmark_md.py-159-    if not all(isinstance(x, int) for x in xs):
+benchmarks/generate_benchmark_md.py:160:        return seq_lens_str
+benchmarks/generate_benchmark_md.py-161-    first = xs[0]
+benchmarks/generate_benchmark_md.py-162-    if len(xs) >= 2 and all(x == first for x in xs):
+benchmarks/generate_benchmark_md.py-163-        return f"{first} x {len(xs)}"
+benchmarks/generate_benchmark_md.py:164:    return seq_lens_str
+benchmarks/generate_benchmark_md.py-165-
+benchmarks/generate_benchmark_md.py-166-
+benchmarks/generate_benchmark_md.py-167-def _case_detail(c: dict) -> str:
+benchmarks/generate_benchmark_md.py-168-    """Scenario text for the Case column (T/H/D are printed once above the table)."""
+benchmarks/generate_benchmark_md.py-169-    if c["kind"] == "fixed":
+benchmarks/generate_benchmark_md.py-170-        return "Fixed"
+benchmarks/generate_benchmark_md.py:171:    seq = _fmt_seq_lens(c["seq_lens"])
+benchmarks/generate_benchmark_md.py-172-    if seq.startswith("["):
+benchmarks/generate_benchmark_md.py:173:        return f"Varlen, `seq_lens`={seq}"
+benchmarks/generate_benchmark_md.py:174:    return f"Varlen, `seq_lens`=`{seq}`"
+benchmarks/generate_benchmark_md.py-175-
+benchmarks/generate_benchmark_md.py-176-
+benchmarks/generate_benchmark_md.py-177-def _fmt_ms(x: float) -> str:
+benchmarks/generate_benchmark_md.py-178-    return f"{x:.4f}"
+benchmarks/generate_benchmark_md.py-179-
+benchmarks/generate_benchmark_md.py-180-
+--
+benchmarks/generate_benchmark_md.py-182-    if flash <= 0:
+benchmarks/generate_benchmark_md.py-183-        return "—"
+benchmarks/generate_benchmark_md.py-184-    return f"{chunk / flash:.2f}×"
+benchmarks/generate_benchmark_md.py-185-
+benchmarks/generate_benchmark_md.py-186-
+benchmarks/generate_benchmark_md.py-187-def _argv_with_h(argv: list[str], h: int) -> list[str]:
+benchmarks/generate_benchmark_md.py:188:    """Drop any ``--H`` / ``--H=`` from *argv*, then append ``--H`` *h*."""
+benchmarks/generate_benchmark_md.py-189-    out: list[str] = []
+benchmarks/generate_benchmark_md.py-190-    i = 0
+benchmarks/generate_benchmark_md.py-191-    while i < len(argv):
+benchmarks/generate_benchmark_md.py-192-        a = argv[i]
+benchmarks/generate_benchmark_md.py:193:        if a == "--H" and i + 1 < len(argv):
+benchmarks/generate_benchmark_md.py-194-            i += 2
+benchmarks/generate_benchmark_md.py-195-            continue
+benchmarks/generate_benchmark_md.py:196:        if a.startswith("--H="):
+benchmarks/generate_benchmark_md.py-197-            i += 1
+benchmarks/generate_benchmark_md.py-198-            continue
+benchmarks/generate_benchmark_md.py-199-        out.append(a)
+benchmarks/generate_benchmark_md.py-200-        i += 1
+benchmarks/generate_benchmark_md.py:201:    out.extend(["--H", str(h)])
+benchmarks/generate_benchmark_md.py-202-    return out
+benchmarks/generate_benchmark_md.py-203-
+benchmarks/generate_benchmark_md.py-204-
+benchmarks/generate_benchmark_md.py-205-def _complete_cases(raw: list[dict]) -> list[dict]:
+benchmarks/generate_benchmark_md.py-206-    return [
+benchmarks/generate_benchmark_md.py-207-        c
+--
+benchmarks/generate_benchmark_md.py-239-    sections: list[list[dict]],
+benchmarks/generate_benchmark_md.py-240-    generated_at: str,
+benchmarks/generate_benchmark_md.py-241-    generator_cmd: str,
+benchmarks/generate_benchmark_md.py-242-    device_label: str,
+benchmarks/generate_benchmark_md.py-243-) -> str:
+benchmarks/generate_benchmark_md.py-244-    """
+benchmarks/generate_benchmark_md.py:245:    *sections*: one ``cases`` list per table (default ``H``, then ``H=64``).
+benchmarks/generate_benchmark_md.py-246-    *generator_cmd*: command that reproduces this report.
+benchmarks/generate_benchmark_md.py-247-    *device_label*: device/platform label printed in the report title.
+benchmarks/generate_benchmark_md.py-248-    """
+benchmarks/generate_benchmark_md.py-249-    title = "# KDA forward benchmark"
+benchmarks/generate_benchmark_md.py-250-    if device_label:
+benchmarks/generate_benchmark_md.py-251-        title += f" ({device_label})"
+--
+benchmarks/bench_fwd.py-27-    mean = sum(xs) / n if n else float("nan")
+benchmarks/bench_fwd.py-28-    mn = xs[0] if xs else float("nan")
+benchmarks/bench_fwd.py-29-    mx = xs[-1] if xs else float("nan")
+benchmarks/bench_fwd.py-30-    return mean, mn, mx
+benchmarks/bench_fwd.py-31-
+benchmarks/bench_fwd.py-32-
+benchmarks/bench_fwd.py:33:def run_case(seq_lens, H, D, warmup, iters, repeats):
+benchmarks/bench_fwd.py-34-    device = torch.device("cuda")
+benchmarks/bench_fwd.py-35-    LOWER_BOUND = -5.0
+benchmarks/bench_fwd.py-36-    scale_float = 1.0 / math.sqrt(D)
+benchmarks/bench_fwd.py-37-
+benchmarks/bench_fwd.py:38:    varlen = len(seq_lens) > 1
+benchmarks/bench_fwd.py:39:    T_total = sum(seq_lens)
+benchmarks/bench_fwd.py:40:    N = len(seq_lens)
+benchmarks/bench_fwd.py-41-
+benchmarks/bench_fwd.py-42-    if varlen:
+benchmarks/bench_fwd.py-43-        cu_seqlens = torch.tensor(
+benchmarks/bench_fwd.py:44:            [0] + list(torch.cumsum(torch.tensor(seq_lens), dim=0).tolist()),
+benchmarks/bench_fwd.py-45-            dtype=torch.long, device=device,
+benchmarks/bench_fwd.py-46-        )
+benchmarks/bench_fwd.py:47:        print(f"varlen shape=[{T_total},{H},{D}] seq_lens={seq_lens} warmup={warmup} iters={iters} repeats={repeats}")
+benchmarks/bench_fwd.py-48-        extra = {"cu_seqlens": cu_seqlens}
+benchmarks/bench_fwd.py-49-    else:
+benchmarks/bench_fwd.py-50-        print(f"shape=[{T_total},{H},{D}] warmup={warmup} iters={iters} repeats={repeats}")
+benchmarks/bench_fwd.py-51-        extra = {}
+benchmarks/bench_fwd.py-52-
+benchmarks/bench_fwd.py-53-    q = F.normalize(torch.randn((1, T_total, H, D), dtype=torch.float32, device=device), p=2, dim=-1).to(torch.bfloat16)
+--
+benchmarks/bench_fwd.py-134-
+benchmarks/bench_fwd.py-135-FIXED_CASES = [
+benchmarks/bench_fwd.py-136-    [8192],
+benchmarks/bench_fwd.py-137-]
+benchmarks/bench_fwd.py-138-
+benchmarks/bench_fwd.py-139-VARLEN_CASES = [
+benchmarks/bench_fwd.py:140:    [1300, 547, 2048, 963, 271, 3063],
+benchmarks/bench_fwd.py:141:    [1024] * 8,
+benchmarks/bench_fwd.py-142-]
+benchmarks/bench_fwd.py-143-
+benchmarks/bench_fwd.py-144-
+benchmarks/bench_fwd.py-145-def main():
+benchmarks/bench_fwd.py-146-    import argparse
+benchmarks/bench_fwd.py-147-    p = argparse.ArgumentParser()
+benchmarks/bench_fwd.py-148-    p.add_argument("--warmup", type=int, default=30)
+benchmarks/bench_fwd.py-149-    p.add_argument("--iters", type=int, default=200)
+benchmarks/bench_fwd.py-150-    p.add_argument("--repeats", type=int, default=5)
+benchmarks/bench_fwd.py-151-    p.add_argument("--mode", choices=["fixed", "varlen", "all"], default="all")
+benchmarks/bench_fwd.py:152:    p.add_argument("--H", type=int, default=96)
+benchmarks/bench_fwd.py-153-    p.add_argument("--D", type=int, default=128)
+benchmarks/bench_fwd.py-154-    args = p.parse_args()
+benchmarks/bench_fwd.py-155-
+benchmarks/bench_fwd.py-156-    cases = []
+benchmarks/bench_fwd.py-157-    if args.mode in ("fixed", "all"):
+benchmarks/bench_fwd.py-158-        cases.extend(FIXED_CASES)
+benchmarks/bench_fwd.py-159-    if args.mode in ("varlen", "all"):
+benchmarks/bench_fwd.py-160-        cases.extend(VARLEN_CASES)
+benchmarks/bench_fwd.py-161-
+benchmarks/bench_fwd.py:162:    for seq_lens in cases:
+benchmarks/bench_fwd.py:163:        run_case(seq_lens, args.H, args.D, args.warmup, args.iters, args.repeats)
+benchmarks/bench_fwd.py-164-
+benchmarks/bench_fwd.py-165-
+benchmarks/bench_fwd.py-166-if __name__ == "__main__":
+benchmarks/bench_fwd.py-167-    main()
+--
+tests/test_fwd_full.py-53-]
+tests/test_fwd_full.py-54-STATE_IO_IDS = ["in+out", "in_only", "out_only", "no_state"]
+tests/test_fwd_full.py-55-
+tests/test_fwd_full.py-56-STATE_DTYPES = ["bf16", "fp32"]
+tests/test_fwd_full.py-57-
+tests/test_fwd_full.py-58-H_VALUES = [1, 4, 32, 96]
+tests/test_fwd_full.py:59:T_VALUES = [16, 64, 256, 1024, 4096, 8192, 17, 37, 97]
+tests/test_fwd_full.py-60-
+tests/test_fwd_full.py-61-
+tests/test_fwd_full.py-62-# ---------------------------------------------------------------------------
+tests/test_fwd_full.py-63-# Fixed-length tests
+tests/test_fwd_full.py-64-# ---------------------------------------------------------------------------
+tests/test_fwd_full.py-65-
+--
+tests/test_fwd_full.py-100-
+tests/test_fwd_full.py-101-VARLEN_CASES = [
+tests/test_fwd_full.py-102-    [16],
+tests/test_fwd_full.py-103-    [16, 16],
+tests/test_fwd_full.py-104-    [4, 8, 12],
+tests/test_fwd_full.py-105-    [64, 128, 256],
+tests/test_fwd_full.py:106:    [1300, 547, 2048, 963, 271, 3063],
+tests/test_fwd_full.py:107:    [1024] * 8,
+tests/test_fwd_full.py-108-    [20, 50, 100],
+tests/test_fwd_full.py-109-    [17, 33, 65],
+tests/test_fwd_full.py-110-]
+tests/test_fwd_full.py-111-VARLEN_H = [1, 4, 96]
+tests/test_fwd_full.py-112-
+tests/test_fwd_full.py-113-
+tests/test_fwd_full.py-114-@pytest.mark.parametrize("H", VARLEN_H, ids=[f"H{h}" for h in VARLEN_H])
+tests/test_fwd_full.py:115:@pytest.mark.parametrize("seq_lens", VARLEN_CASES,
+tests/test_fwd_full.py-116-                         ids=[f"seqs{'_'.join(str(s) for s in sl)}" for sl in VARLEN_CASES])
+tests/test_fwd_full.py-117-@pytest.mark.parametrize("state_dtype", STATE_DTYPES)
+tests/test_fwd_full.py-118-@pytest.mark.parametrize("has_in,has_out", STATE_IO, ids=STATE_IO_IDS)
+tests/test_fwd_full.py:119:def test_fwd_varlen(seq_lens, H, state_dtype, has_in, has_out):
+tests/test_fwd_full.py:120:    T_total = sum(seq_lens)
+tests/test_fwd_full.py:121:    N = len(seq_lens)
+tests/test_fwd_full.py-122-    cu_seqlens = torch.tensor(
+tests/test_fwd_full.py:123:        [0] + list(torch.cumsum(torch.tensor(seq_lens), dim=0).tolist()),
+tests/test_fwd_full.py-124-        dtype=torch.long, device="cuda",
+tests/test_fwd_full.py-125-    )
+tests/test_fwd_full.py-126-
+tests/test_fwd_full.py-127-    q, k, v, g, beta, A_log, dt_bias, scale = _make_inputs(T_total, H)
+tests/test_fwd_full.py-128-    dtype = torch.bfloat16 if state_dtype == "bf16" else torch.float32
+tests/test_fwd_full.py-129-
+--
+tests/test_fwd_full.py-141-    out_ref = torch.zeros_like(q)
+tests/test_fwd_full.py-142-    torch_ref(q, k, v, g, beta, scale, out_ref,
+tests/test_fwd_full.py-143-              A_log=A_log, dt_bias=dt_bias, lower_bound=LOWER_BOUND,
+tests/test_fwd_full.py-144-              initial_state=init_r, final_state=final_r, cu_seqlens=cu_seqlens)
+tests/test_fwd_full.py-145-
+tests/test_fwd_full.py-146-    assert torch.equal(out_kernel, out_ref), \
+tests/test_fwd_full.py:147:        f"output mismatch: seqs={seq_lens} H={H} dtype={state_dtype} in={has_in} out={has_out}"
+tests/test_fwd_full.py-148-    if final_k is not None:
+tests/test_fwd_full.py-149-        assert torch.equal(final_k, final_r), \
+tests/test_fwd_full.py:150:            f"final_state mismatch: seqs={seq_lens} H={H} dtype={state_dtype} in={has_in} out={has_out}"
+tests/test_fwd_full.py-151-
+tests/test_fwd_full.py-152-
+tests/test_fwd_full.py-153-# ---------------------------------------------------------------------------
+tests/test_fwd_full.py-154-# Batched tests (B > 1, equal-length sequences)
+tests/test_fwd_full.py-155-# ---------------------------------------------------------------------------
+tests/test_fwd_full.py-156-
+--
+tests/test_fwd_full.py-238-              initial_state=init_r, final_state=final_r)
+tests/test_fwd_full.py-239-
+tests/test_fwd_full.py-240-    assert torch.equal(out_kernel, out_ref), f"output mismatch: T={T}"
+tests/test_fwd_full.py-241-    assert torch.equal(final_k, final_r), f"final_state mismatch: T={T}"
+tests/test_fwd_full.py-242-
+tests/test_fwd_full.py-243-
+tests/test_fwd_full.py:244:@pytest.mark.parametrize("seq_lens", LONG_VARLEN_CASES,
+tests/test_fwd_full.py-245-                         ids=[f"seqs{'_'.join(str(s) for s in sl)}" for sl in LONG_VARLEN_CASES])
+tests/test_fwd_full.py:246:def test_fwd_long_varlen(seq_lens):
+tests/test_fwd_full.py-247-    H = 1
+tests/test_fwd_full.py:248:    T_total = sum(seq_lens)
+tests/test_fwd_full.py:249:    N = len(seq_lens)

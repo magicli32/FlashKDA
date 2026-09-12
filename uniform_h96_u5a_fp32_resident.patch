@@ -1,0 +1,54 @@
+diff --git a/csrc/smxx/fwd_launch.cu b/csrc/smxx/fwd_launch.cu
+index c45f829..6526629 100644
+--- a/csrc/smxx/fwd_launch.cu
++++ b/csrc/smxx/fwd_launch.cu
+@@ -479,8 +479,30 @@ void launch_fwd(
+         int smem_size_k2 = sizeof(SharedStorageK2T);
+ 
+         auto kernel2 = [&]() {
+-            if constexpr (StateFP32) {
+-                // FP32 keeps the P1/P0-L codegen path.
++            if constexpr (
++                StateFP32 &&
++                HasStateIn &&
++                HasStateOut
++            ) {
++                // U5-A diagnostic:
++                // Reuse the register-resident recurrence kernel for FP32
++                // state. It already converts FP32 initial state to BF16
++                // and converts the final BF16 state back to FP32.
++                return _flash_kda_fwd_recurrence_bf16<
++                    decltype(tma_load_v), decltype(tma_load_beta2),
++                    decltype(tma_load_ws_kd), decltype(tma_load_ws_qd), decltype(tma_load_ws_kr),
++                    decltype(tma_load_ws_gt), decltype(tma_load_ws_inv), decltype(tma_load_ws_mqk),
++                    decltype(tma_load_initial_state),
++                    decltype(tma_load_correction_state),
++                    decltype(tma_store_final_state),
++                    decltype(tma_store_out),
++                    CHUNK, D, kInputStages, kOutputStages, kK2Threads,
++                    HasStateIn, HasStateOut, StateFP32, IsVarlen,
++                    false
++                >;
++            } else if constexpr (StateFP32) {
++                // One-sided/no-state FP32 instantiations keep the
++                // established generic kernel and its shorter signature.
+                 return _flash_kda_fwd_recurrence<
+                     decltype(tma_load_v), decltype(tma_load_beta2),
+                     decltype(tma_load_ws_kd), decltype(tma_load_ws_qd), decltype(tma_load_ws_kr),
+@@ -491,7 +513,7 @@ void launch_fwd(
+                     CHUNK, D, kInputStages, kOutputStages, kK2Threads,
+                     HasStateIn, HasStateOut, StateFP32, IsVarlen
+                 >;
+-		            } else if constexpr (HasStateIn && HasStateOut) {
++            } else if constexpr (HasStateIn && HasStateOut) {
+                 // Stateful BF16:
+                 // keep the P2 register-resident recurrent-state winner.
+                 if (use_direct_initial) {
+@@ -543,7 +565,6 @@ void launch_fwd(
+         dim3 block_k2(kK2Threads);
+ 
+ 	        if constexpr (
+-            !StateFP32 &&
+             HasStateIn &&
+             HasStateOut
+         ) {

@@ -1,0 +1,66 @@
+1062-    {
+1063-        constexpr int kK2Threads = 32 * 2 + 128;
+1064-        using SharedStorageK2T = SharedStorageK2<K2L, kInputStages, kOutputStages>;
+1065-        int smem_size_k2 = sizeof(SharedStorageK2T);
+1066-
+1067-        auto kernel2 = [&]() {
+1068-            if constexpr (StateFP32) {
+1069-                // FP32 keeps the P1/P0-L codegen path.
+1070-                return _flash_kda_fwd_recurrence<
+1071-                    decltype(tma_load_v), decltype(tma_load_beta2),
+1072-                    decltype(tma_load_ws_kd), decltype(tma_load_ws_qd), decltype(tma_load_ws_kr),
+1073-                    decltype(tma_load_ws_gt), decltype(tma_load_ws_inv), decltype(tma_load_ws_mqk),
+1074-                    decltype(tma_load_initial_state),
+1075-                    decltype(tma_store_final_state),
+1076-                    decltype(tma_store_out),
+1077-                    CHUNK, D, kInputStages, kOutputStages, kK2Threads,
+1078-                    HasStateIn, HasStateOut, StateFP32, IsVarlen
+1079-                >;
+1080-		            } else if constexpr (HasStateIn && HasStateOut) {
+1081-                // Stateful BF16:
+1082:                // keep the P2 register-resident recurrent-state winner.
+1083-                if (use_direct_initial) {
+1084-                    return _flash_kda_fwd_recurrence_bf16<
+1085-                        decltype(tma_load_v), decltype(tma_load_beta2),
+1086-                        decltype(tma_load_ws_kd), decltype(tma_load_ws_qd), decltype(tma_load_ws_kr),
+1087-                        decltype(tma_load_ws_gt), decltype(tma_load_ws_inv), decltype(tma_load_ws_mqk),
+1088-                        decltype(tma_load_initial_state),
+1089-                        decltype(tma_load_correction_state),
+1090-                        decltype(tma_store_final_state),
+1091-                        decltype(tma_store_out),
+1092-                        CHUNK, D, kInputStages, kOutputStages, kK2Threads,
+1093-                        HasStateIn, HasStateOut, StateFP32, IsVarlen,
+1094-                        true
+1095-                    >;
+1096-                }
+1097-
+1098-                return _flash_kda_fwd_recurrence_bf16<
+1099-                    decltype(tma_load_v), decltype(tma_load_beta2),
+1100-                    decltype(tma_load_ws_kd), decltype(tma_load_ws_qd), decltype(tma_load_ws_kr),
+1101-                    decltype(tma_load_ws_gt), decltype(tma_load_ws_inv), decltype(tma_load_ws_mqk),
+1102-                    decltype(tma_load_initial_state),
+1103-                    decltype(tma_load_correction_state),
+1104-                    decltype(tma_store_final_state),
+1105-                    decltype(tma_store_out),
+1106-                    CHUNK, D, kInputStages, kOutputStages, kK2Threads,
+1107-                    HasStateIn, HasStateOut, StateFP32, IsVarlen,
+1108-                    false
+1109-                >;
+1110-            } else {
+1111-                // No-state / one-sided BF16:
+1112-                // use the P1 shared-state maxnreg(120) kernel.
+1113-                return _flash_kda_fwd_recurrence_bf16_shared<
+1114-                    decltype(tma_load_v), decltype(tma_load_beta2),
+1115-                    decltype(tma_load_ws_kd), decltype(tma_load_ws_qd), decltype(tma_load_ws_kr),
+1116-                    decltype(tma_load_ws_gt), decltype(tma_load_ws_inv), decltype(tma_load_ws_mqk),
+1117-                    decltype(tma_load_initial_state),
+1118-                    decltype(tma_store_final_state),
+1119-                    decltype(tma_store_out),
+1120-                    CHUNK, D, kInputStages, kOutputStages, kK2Threads,
+1121-                    HasStateIn, HasStateOut, StateFP32, IsVarlen
+1122-                >;
+1123-            }
+1124-        }();
+1125-
+1126-        cudaFuncSetAttribute(kernel2, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size_k2);
+1127-

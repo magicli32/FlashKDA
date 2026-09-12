@@ -1,0 +1,70 @@
+  // A1 tmem column
+  const float* gCp = gC + ((size_t)c0 * H + h) * K + ch * 32;
+  const uint32_t a1st = taddr + lane_hi + (256u + ch * 16);
+  for (int c = c0; c < c0 + per_seg; ++c) {
+    const int buf_idx = (c - c0) & 1;
+    // prefetch this chunk's gC early: its latency hides behind A1
+    // staging + P1 (u0 rides the chunk TMA into sU0 instead)
+    alignas(16) float gv[32];
+#pragma unroll
+    for (int j = 0; j < 8; ++j)
+      reinterpret_cast<float4*>(gv)[j] = reinterpret_cast<const float4*>(gCp)[j];
+    gCp += (size_t)H * K;
+    // stage A1 = S^T packed single-bf16 (o's S-term reads it too, via
+    // P3); no lo pack/st — vet b8 (vet_tf32_step.py): S-read precision
+    // is not the error floor, worst kernel-ctx cell 1.27x of hi/lo
+    {
+      uint32_t hw[16];
+#pragma unroll
+      for (int w = 0; w < 16; ++w) {
+        const __nv_bfloat162 h2 = __floats2bfloat162_rn(Sreg[2 * w], Sreg[2 * w + 1]);
+        hw[w] = *reinterpret_cast<const uint32_t*>(&h2);
+      }
+      ptx::tcgen05_st_32x32b_x16(a1st, hw);
+    }
+    // h[c]: the register state BEFORE this chunk (store-only; the last
+    // boundary is final_state's). Dense — every row written; a per-sequence
+    // snapshot-index filter would gate this store (sparse follow-up).
+    if (hpc) {
+      const size_t hb = ((size_t)c * H + h) * K * K;
+      if (hpc_v_first) {  // [V,K]: kc contiguous, one run per thread
+        const size_t off = hb + (size_t)vc * K + ch * 32;
+        if (hpc_bf16) {
+          auto* p = reinterpret_cast<__nv_bfloat162*>(reinterpret_cast<bf16*>(hpc) + off);
+#pragma unroll
+          for (int j = 0; j < 16; ++j)
+            p[j] = __floats2bfloat162_rn(Sreg[2 * j], Sreg[2 * j + 1]);
+        } else {
+          auto* p = reinterpret_cast<float4*>(reinterpret_cast<float*>(hpc) + off);
+#pragma unroll
+          for (int j = 0; j < 8; ++j)
+            p[j] = reinterpret_cast<const float4*>(Sreg)[j];
+        }
+      } else {  // [K,V]: vc contiguous, coalesced across the warp
+        const size_t off = hb + (size_t)(ch * 32) * K + vc;
+        if (hpc_bf16) {
+          bf16* p = reinterpret_cast<bf16*>(hpc) + off;
+#pragma unroll
+          for (int j = 0; j < 32; ++j)
+            p[j * K] = __float2bfloat16(Sreg[j]);
+        } else {
+          float* p = reinterpret_cast<float*>(hpc) + off;
+#pragma unroll
+          for (int j = 0; j < 32; ++j)
+            p[j * K] = Sreg[j];
+        }
+      }
+    }
+    ptx::tcgen05_wait_st();
+    ptx::tcgen05_fence_before_thread_sync();
+    __syncthreads();
+    // ALL threads gate on the chunk TMA: the sU0 reads in the U drain
+    // below need the cross-proxy visibility this mbarrier's completion
+    // gives its waiters (non-issuer threads previously just idled into
+    // the mb_p1 wait from here, so no overlap is lost)
+    ptx::mbar_wait_parity(&mb_tma, (c - c0) & 1);
+    if (tid == 0 || tid == 32) {  // dual issuers, disjoint D regions
+      // phase closed: arm the next chunk into the other buffer
+      if (tid == 0 && c + 1 < c0 + per_seg) tma_issue(c + 1);
+      ptx::tcgen05_fence_after_thread_sync();
+      const uint32_t idesc1 = ptx::mma_inst_desc_dense<ptx::MmaDenseKind::F16>(
