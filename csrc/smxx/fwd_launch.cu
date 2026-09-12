@@ -4,6 +4,43 @@
 
 #include <cstdlib>
 
+// ============================================================
+// P0-T1: lightweight K2 admission gate.
+//
+// Only one warp / one CTA runs this kernel on the K2 stream.
+// It prevents the full 96-CTA recurrence kernel from occupying
+// the GPU before K1 has built a configurable workspace lead.
+//
+// This gate is performance-only. K2 still performs its original
+// acquire polling on every ws_ready entry for correctness.
+// ============================================================
+__global__ void _flash_kda_wait_ready_prefix(
+    uint32_t* ws_ready,
+    int total_tiles,
+    int H,
+    int prefix_tiles
+) {
+    int n = H * prefix_tiles;
+
+    for (int linear = int(threadIdx.x);
+         linear < n;
+         linear += int(blockDim.x)) {
+
+        int head = linear / prefix_tiles;
+        int tile = linear - head * prefix_tiles;
+        int ws_idx = head * total_tiles + tile;
+
+        cuda::atomic_ref<uint32_t, cuda::thread_scope_device>
+            ready_ref(ws_ready[ws_idx]);
+
+        // Admission only: K2 itself still uses acquire semantics
+        // before consuming the corresponding workspace.
+        while (ready_ref.load(cuda::memory_order_relaxed) == 0u) {
+            __nanosleep(64);
+        }
+    }
+}
+
 // ==================== launch_fwd ====================
 template <int D, bool HasStateIn, bool HasStateOut, bool StateFP32, bool IsVarlen>
 void launch_fwd(
@@ -207,11 +244,29 @@ void launch_fwd(
                 &maxPriority
             );
 
-            // K1 always stays at the lowest/default priority.
+            // P0-T2:
+            // Allow K1 producer priority to be tuned independently.
+            //
+            // B300 range measured here is [-5, 0], where a smaller
+            // numerical value means higher stream priority.
+            int producerPriority = minPriority;
+
+            if (const char* env =
+                    std::getenv("FLASH_KDA_K1_PRIORITY")) {
+                producerPriority = std::atoi(env);
+            }
+
+            if (producerPriority < maxPriority) {
+                producerPriority = maxPriority;
+            }
+            if (producerPriority > minPriority) {
+                producerPriority = minPriority;
+            }
+
             cudaStreamCreateWithPriority(
                 &producer_stream,
                 cudaStreamNonBlocking,
-                minPriority
+                producerPriority
             );
 
             // P0-F:
@@ -391,6 +446,42 @@ void launch_fwd(
 
         dim3 grid_k2(N, H);
         dim3 block_k2(kK2Threads);
+
+        // ========================================================
+        // P0-T1: delayed admission of the full K2 recurrence grid.
+        //
+        // P=0 : original P0-Q behavior.
+        // P>0 : wait until the first P workspace tiles of every
+        //       head are ready before admitting the 96 K2 CTAs.
+        //
+        // Importantly, K1 itself remains one uninterrupted launch.
+        // ========================================================
+        int k2_gate_tiles = 0;
+
+        if (use_k1k2_overlap) {
+            if (const char* env =
+                    std::getenv("FLASH_KDA_K2_GATE_TILES")) {
+                k2_gate_tiles = std::atoi(env);
+            }
+
+            if (k2_gate_tiles < 0) {
+                k2_gate_tiles = 0;
+            }
+            if (k2_gate_tiles > total_tiles) {
+                k2_gate_tiles = total_tiles;
+            }
+
+            if (k2_gate_tiles > 0) {
+                _flash_kda_wait_ready_prefix<<<
+                    1, 32, 0, k2_stream
+                >>>(
+                    ws_ready,
+                    total_tiles,
+                    H,
+                    k2_gate_tiles
+                );
+            }
+        }
 
         kernel2<<<grid_k2, block_k2, smem_size_k2, k2_stream>>>(
             tma_load_v, tma_load_beta2,
