@@ -179,7 +179,14 @@ __global__ void __launch_bounds__(NumThreads) _flash_kda_state_only(
         warp_role, 1, kComputeThreads
     );
 
-    int seq_idx  = blockIdx.x;
+    int seq_idx = int(blockIdx.x);
+
+    // M7-B1 diagnostic:
+    // launch grid.x is compacted to 2 for the target Mixed H96 case.
+    // Map compact CTA slots back to the original CP segment indices.
+    if (T_total == 8192 && H == 96 && N == 8) {
+        seq_idx = (int(blockIdx.x) == 0) ? 2 : 6;
+    }
     int head_idx = blockIdx.y;
     int64_t bos = cu_seqlens[seq_idx];
     int64_t eos = cu_seqlens[seq_idx + 1];

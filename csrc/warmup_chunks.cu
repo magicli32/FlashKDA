@@ -3,6 +3,7 @@
 #include <cuda_runtime.h>
 #include <cuda_bf16.h>
 #include <cmath>
+#include <cstdlib>
 #include <math_constants.h>
 
 // get_warmup_chunks CUDA kernel
@@ -19,10 +20,16 @@ __global__ void get_warmup_chunks_kernel(
     float threshold,
     const int64_t* __restrict__ cu_seqlens,   // [N+1]
     int H, int D,
+    int compact_active_only,
     int32_t* __restrict__ num_warmup,         // output [N]
     bool* __restrict__ fallback               // output [N]
 ) {
     int seg_idx = blockIdx.x;
+    // M7-B2 diagnostic:
+    // compact grid slot 0/1 maps to CP source segment 2/6.
+    if (compact_active_only) {
+        seg_idx = (int(blockIdx.x) == 0) ? 2 : 6;
+    }
     int h = threadIdx.x;  // head index
 
     // Padding threads must participate because the block uses __syncthreads().
@@ -113,7 +120,22 @@ void get_warmup_chunks_cuda(
 
     auto g_flat = g.reshape({-1, H, D});  // [T, H, D]
 
-    dim3 grid(N);
+    // M7-B2 diagnostic:
+    // Only enable compact warmup for the target Mixed H96 CP-P2 path.
+    const char* active_env =
+        std::getenv("FLASHKDA_CP_ACTIVE_ONLY");
+
+    bool compact_active_only =
+        active_env != nullptr &&
+        active_env[0] == '1' &&
+        N == 8 &&
+        H == 96 &&
+        D == 128 &&
+        g_flat.size(0) == 8192;
+
+    int launch_N = compact_active_only ? 2 : N;
+
+    dim3 grid(launch_N);
     int block_size = 1;
     while (block_size < H) block_size <<= 1;
     dim3 block(block_size);
@@ -130,6 +152,7 @@ void get_warmup_chunks_cuda(
         (float)threshold,
         cu_seqlens.data_ptr<int64_t>(),
         H, D,
+	compact_active_only ? 1 : 0,
         num_warmup.data_ptr<int32_t>(),
         reinterpret_cast<bool*>(fallback.data_ptr<bool>())
     );

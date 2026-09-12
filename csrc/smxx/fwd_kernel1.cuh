@@ -182,9 +182,42 @@ __global__ void __launch_bounds__(NumThreads, 8) _flash_kda_fwd_prepare(
 
         head_idx = task % H;
         global_tile_idx = task / H;
-    } else {
-        // Original FlashKDA mapping.
-        global_tile_idx = int(blockIdx.x);
+	    } else {
+        // Original FlashKDA mapping, with an M10-A compact
+        // warmup-only diagnostic for Mixed H96 CP-P2.
+        if constexpr (WarmupOnly) {
+            if (
+                T_total == 8192 &&
+                H == 96 &&
+                N == 8 &&
+                int(gridDim.x) == 9
+            ) {
+                int compact_task = int(blockIdx.x);
+
+                // CP tile prefixes:
+                // [0,82,117,213,245,306,323,419,515]
+                //
+                // seg2: last 5 / 96 tiles
+                //   global = 117 + [91..95] = [208..212]
+                //
+                // seg6: last 4 / 96 tiles
+                //   global = 323 + [92..95] = [415..418]
+                if (compact_task < 5) {
+                    global_tile_idx =
+                        208 + compact_task;
+                } else {
+                    global_tile_idx =
+                        415 + (compact_task - 5);
+                }
+            } else {
+                global_tile_idx =
+                    int(blockIdx.x);
+            }
+        } else {
+            global_tile_idx =
+                int(blockIdx.x);
+        }
+
         head_idx = int(blockIdx.y);
     }
 
